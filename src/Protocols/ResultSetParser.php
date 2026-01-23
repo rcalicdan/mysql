@@ -2,7 +2,8 @@
 
 namespace Hibla\MysqlClient\Protocols;
 
-use Hibla\MysqlClient\Result;
+use Hibla\MysqlClient\ValueObjects\ColumnDefinition;
+use Hibla\MysqlClient\ValueObjects\Result;
 use Rcalicdan\MySQLBinaryProtocol\Buffer\Reader\BufferPayloadReaderFactory;
 
 final class ResultSetParser
@@ -34,7 +35,7 @@ final class ResultSetParser
         }
 
         $reader = $this->readerFactory->createFromString($rawPayload);
-        $firstByte = ord($rawPayload[0]);
+        $firstByte = \ord($rawPayload[0]);
 
         if ($this->isEofPacketDuringRows($firstByte, $rawPayload)) {
             $this->completeResultSet();
@@ -64,7 +65,7 @@ final class ResultSetParser
     private function isEofPacket(int $firstByte, string $rawPayload): bool
     {
         return $firstByte === self::EOF_PACKET_MARKER &&
-            strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
+            \strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
     }
 
     private function completeResultSet(): void

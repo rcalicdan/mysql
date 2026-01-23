@@ -1,6 +1,6 @@
 <?php
 
-namespace Hibla\MysqlClient;
+namespace Hibla\MysqlClient\ValueObjects;
 
 /**
  * Represents the result of a database query that returns rows.
@@ -11,7 +11,9 @@ namespace Hibla\MysqlClient;
 class Result implements \IteratorAggregate
 {
     private int $position = 0;
+
     private readonly int $rowCount;
+
     private readonly int $columnCount;
 
     /**

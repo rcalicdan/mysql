@@ -2,7 +2,11 @@
 
 namespace Hibla\MysqlClient\Protocols;
 
-use Hibla\MysqlClient\Result;
+use Hibla\MysqlClient\Enums\FieldType;
+use Hibla\MysqlClient\Enums\PacketMarker;
+use Hibla\MysqlClient\Enums\ParserState;
+use Hibla\MysqlClient\ValueObjects\ColumnDefinition;
+use Hibla\MysqlClient\ValueObjects\Result;
 use Rcalicdan\MySQLBinaryProtocol\Buffer\Reader\BufferPayloadReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
@@ -12,31 +16,18 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  */
 final class BinaryResultSetParser
 {
-    private const STATE_INIT = 0;
-    private const STATE_COLUMNS = 1;
-    private const STATE_ROWS = 2;
+    private const int EOF_PACKET_MAX_LENGTH = 9;
 
-    // MySQL field types
-    private const FIELD_TYPE_TINY = 0x01;
-    private const FIELD_TYPE_SHORT = 0x02;
-    private const FIELD_TYPE_LONG = 0x03;
-    private const FIELD_TYPE_FLOAT = 0x04;
-    private const FIELD_TYPE_DOUBLE = 0x05;
-    private const FIELD_TYPE_TIMESTAMP = 0x07;
-    private const FIELD_TYPE_LONGLONG = 0x08;
-    private const FIELD_TYPE_MEDIUM = 0x09;
-    private const FIELD_TYPE_DATE = 0x0A;
-    private const FIELD_TYPE_TIME = 0x0B;
-    private const FIELD_TYPE_DATETIME = 0x0C;
-
-    private const EOF_MARKER = 0xFE;
-    private const EOF_PACKET_MAX_LENGTH = 9;
-
-    private int $state = self::STATE_INIT;
-    private ?int $columnCount = null;
     private array $columns = [];
+
     private array $rows = [];
+
     private bool $isComplete = false;
+
+    private ?int $columnCount = null;
+
+    private ParserState $state = ParserState::INIT;
+
     private ?BufferPayloadReaderFactory $readerFactory = null;
 
     public function processPayload(string $rawPayload): void
@@ -46,7 +37,7 @@ final class BinaryResultSetParser
         }
 
         $reader = $this->getReader($rawPayload);
-        $firstByte = ord($rawPayload[0]);
+        $firstByte = \ord($rawPayload[0]);
 
         if ($this->isEndOfResultSet($firstByte, $rawPayload)) {
             $this->markComplete();
@@ -55,10 +46,33 @@ final class BinaryResultSetParser
         }
 
         match ($this->state) {
-            self::STATE_INIT => $this->handleInitState($reader),
-            self::STATE_COLUMNS => $this->handleColumnsState($reader, $firstByte),
-            self::STATE_ROWS => $this->handleRowsState($reader),
+            ParserState::INIT => $this->handleInitState($reader),
+            ParserState::COLUMNS => $this->handleColumnsState($reader, $firstByte),
+            ParserState::ROWS => $this->handleRowsState($reader),
         };
+    }
+
+    public function isComplete(): bool
+    {
+        return $this->isComplete;
+    }
+
+    public function getResult(): Result
+    {
+        return new Result($this->rows);
+    }
+
+    /**
+     * Reset the parser state for reuse
+     */
+    public function reset(): void
+    {
+        $this->state = ParserState::INIT;
+        $this->columnCount = null;
+        $this->columns = [];
+        $this->rows = [];
+        $this->isComplete = false;
+        $this->readerFactory = null;
     }
 
     private function getReader(string $rawPayload): PayloadReader
@@ -70,15 +84,14 @@ final class BinaryResultSetParser
 
     private function isEndOfResultSet(int $firstByte, string $rawPayload): bool
     {
-        return $this->state === self::STATE_ROWS
-            && $firstByte === self::EOF_MARKER
-            && strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
+        return $this->state === ParserState::ROWS
+            && $firstByte === PacketMarker::EOF->value
+            && \strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
     }
 
     private function markComplete(): void
     {
         $this->isComplete = true;
-        // Clear intermediate data to free memory
         $this->columns = [];
         $this->readerFactory = null;
     }
@@ -86,13 +99,13 @@ final class BinaryResultSetParser
     private function handleInitState(PayloadReader $reader): void
     {
         $this->columnCount = $reader->readLengthEncodedIntegerOrNull();
-        $this->state = self::STATE_COLUMNS;
+        $this->state = ParserState::COLUMNS;
     }
 
     private function handleColumnsState(PayloadReader $reader, int $firstByte): void
     {
-        if ($firstByte === self::EOF_MARKER) {
-            $this->state = self::STATE_ROWS;
+        if ($firstByte === PacketMarker::EOF->value) {
+            $this->state = ParserState::ROWS;
 
             return;
         }
@@ -136,7 +149,7 @@ final class BinaryResultSetParser
 
     private function isColumnNull(string $nullBitmap, int $columnIndex): bool
     {
-        $byte = ord($nullBitmap[$columnIndex >> 3]);
+        $byte = \ord($nullBitmap[$columnIndex >> 3]);
         $bit = 1 << ($columnIndex & 7);
 
         return ($byte & $bit) !== 0;
@@ -145,25 +158,42 @@ final class BinaryResultSetParser
     private function parseColumnValue(PayloadReader $reader, ColumnDefinition $column): mixed
     {
         return match ($column->type) {
-            self::FIELD_TYPE_TINY => $reader->readFixedInteger(1),
-            self::FIELD_TYPE_SHORT => $reader->readFixedInteger(2),
-            self::FIELD_TYPE_LONG => $reader->readFixedInteger(4),
-            self::FIELD_TYPE_LONGLONG => $reader->readFixedInteger(8),
-            self::FIELD_TYPE_MEDIUM => $this->parseMediumInt($reader),
-            self::FIELD_TYPE_FLOAT => $this->parseFloat($reader),
-            self::FIELD_TYPE_DOUBLE => $this->parseDouble($reader),
-            self::FIELD_TYPE_DATE,
-            self::FIELD_TYPE_TIMESTAMP,
-            self::FIELD_TYPE_DATETIME => $this->parseDateTimeBinary($reader),
-            self::FIELD_TYPE_TIME => $this->parseTimeBinary($reader),
+            FieldType::TINY->value => $reader->readFixedInteger(1),
+            FieldType::SHORT->value => $reader->readFixedInteger(2),
+            FieldType::LONG->value => $reader->readFixedInteger(4),
+            FieldType::LONGLONG->value => $reader->readFixedInteger(8),
+            FieldType::MEDIUM->value => $this->parseMediumInt($reader),
+            FieldType::FLOAT->value => $this->parseFloat($reader),
+            FieldType::DOUBLE->value => $this->parseDouble($reader),
+            FieldType::DATE->value,
+            FieldType::TIMESTAMP->value,
+            FieldType::DATETIME->value => $this->parseDateTimeBinary($reader),
+            FieldType::TIME->value => $this->parseTimeBinary($reader),
+            FieldType::YEAR->value => $reader->readFixedInteger(4),
+            FieldType::DECIMAL->value,
+            FieldType::NEWDECIMAL->value => $reader->readLengthEncodedStringOrNull(),
+            FieldType::ENUM->value,
+            FieldType::SET->value => $reader->readLengthEncodedStringOrNull(),
+            FieldType::JSON->value => $this->parseJson($reader),
+            FieldType::TINY_BLOB->value,
+            FieldType::BLOB->value,
+            FieldType::MEDIUM_BLOB->value,
+            FieldType::LONG_BLOB->value => $reader->readLengthEncodedStringOrNull(),
+            FieldType::STRING->value,
+            FieldType::VAR_STRING->value => $reader->readLengthEncodedStringOrNull(),
             default => $reader->readLengthEncodedStringOrNull(),
         };
+    }
+
+    private function parseJson(PayloadReader $reader): ?string
+    {
+        return $reader->readLengthEncodedStringOrNull();
     }
 
     private function parseMediumInt(PayloadReader $reader): int
     {
         $bytes = $reader->readFixedString(3);
-        $val = unpack('V', $bytes."\x00")[1];
+        $val = unpack('V', $bytes . "\x00")[1];
 
         return ($val & 0x800000) ? ($val | ~0xFFFFFF) : $val;
     }
@@ -191,7 +221,7 @@ final class BinaryResultSetParser
         $day = $reader->readFixedInteger(1);
 
         if ($length === 4) {
-            return sprintf('%04d-%02d-%02d', $year, $month, $day);
+            return \sprintf('%04d-%02d-%02d', $year, $month, $day);
         }
 
         $hour = $reader->readFixedInteger(1);
@@ -199,12 +229,12 @@ final class BinaryResultSetParser
         $second = $reader->readFixedInteger(1);
 
         if ($length === 7) {
-            return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
+            return \sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
         }
 
         $microsecond = $reader->readFixedInteger(4);
 
-        return sprintf('%04d-%02d-%02d %02d:%02d:%02d.%06d', $year, $month, $day, $hour, $minute, $second, $microsecond);
+        return \sprintf('%04d-%02d-%02d %02d:%02d:%02d.%06d', $year, $month, $day, $hour, $minute, $second, $microsecond);
     }
 
     private function parseTimeBinary(PayloadReader $reader): string
@@ -222,36 +252,13 @@ final class BinaryResultSetParser
         $second = $reader->readFixedInteger(1);
 
         $totalHours = ($days * 24) + $hour;
-        $timeStr = sprintf('%s%02d:%02d:%02d', $isNegative ? '-' : '', $totalHours, $minute, $second);
+        $timeStr = \sprintf('%s%02d:%02d:%02d', $isNegative ? '-' : '', $totalHours, $minute, $second);
 
         if ($length === 12) {
             $microsecond = $reader->readFixedInteger(4);
-            $timeStr .= sprintf('.%06d', $microsecond);
+            $timeStr .= \sprintf('.%06d', $microsecond);
         }
 
         return $timeStr;
-    }
-
-    public function isComplete(): bool
-    {
-        return $this->isComplete;
-    }
-
-    public function getResult(): Result
-    {
-        return new Result($this->rows);
-    }
-
-    /**
-     * Reset the parser state for reuse
-     */
-    public function reset(): void
-    {
-        $this->state = self::STATE_INIT;
-        $this->columnCount = null;
-        $this->columns = [];
-        $this->rows = [];
-        $this->isComplete = false;
-        $this->readerFactory = null;
     }
 }

@@ -4,7 +4,20 @@
             "Hibla\\MysqlClient\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
     "require": {
         "rcalicdan/mysql-binary-protocol": "^1.0"
+    },
+    "require-dev": {
+       "pestphp/pest": "^4.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
     }
 }

@@ -37,8 +37,8 @@ final class Auth
 
         // XOR the first hash with the third hash
         $scrambled = '';
-        for ($i = 0; $i < strlen($hash1); $i++) {
-            $scrambled .= chr(ord($hash1[$i]) ^ ord($hash3[$i]));
+        for ($i = 0; $i < \strlen($hash1); $i++) {
+            $scrambled .= \chr(\ord($hash1[$i]) ^ \ord($hash3[$i]));
         }
 
         return $scrambled;
