@@ -1,0 +1,10 @@
+{
+    "autoload": {
+        "psr-4": {
+            "Hibla\\MysqlClient\\": "src/"
+        }
+    },
+    "require": {
+        "rcalicdan/mysql-binary-protocol": "^1.0"
+    }
+}
