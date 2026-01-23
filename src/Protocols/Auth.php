@@ -25,6 +25,14 @@ final class Auth
         return $stage1 ^ $stage3;
     }
 
+    /**
+     * Creates the auth response for caching_sha2_password.
+     * It's calculated as: SHA256(password) XOR SHA256(SHA256(password) + nonce)
+     *
+     * @param  string  $password  The user's password.
+     * @param  string  $nonce  The scramble/nonce from the server's handshake.
+     * @return string The binary scrambled password.
+     */
     public static function scrambleCachingSha2Password(string $password, string $nonce): string
     {
         if ($password === '') {

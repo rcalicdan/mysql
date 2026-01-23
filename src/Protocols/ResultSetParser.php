@@ -2,31 +2,34 @@
 
 namespace Hibla\MysqlClient\Protocols;
 
+use Hibla\MysqlClient\Enums\PacketMarker;
+use Hibla\MysqlClient\Enums\ParserState;
 use Hibla\MysqlClient\ValueObjects\ColumnDefinition;
 use Hibla\MysqlClient\ValueObjects\Result;
 use Rcalicdan\MySQLBinaryProtocol\Buffer\Reader\BufferPayloadReaderFactory;
+use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
+/**
+ * Parses a result set that is returned in the Text Protocol format.
+ * This is used for regular query results (non-prepared statements).
+ */
 final class ResultSetParser
 {
-    private const STATE_INIT = 0;
-    private const STATE_COLUMNS = 1;
-    private const STATE_ROWS = 2;
+    private const int EOF_PACKET_MAX_LENGTH = 9;
 
-    private const EOF_PACKET_MARKER = 0xFE;
-    private const EOF_PACKET_MAX_LENGTH = 9;
-
-    private int $state = self::STATE_INIT;
-    private ?int $columnCount = null;
     private array $columns = [];
-    private array $rows = [];
-    private bool $isComplete = false;
-    private mixed $finalResult = null;
-    private BufferPayloadReaderFactory $readerFactory;
 
-    public function __construct()
-    {
-        $this->readerFactory = new BufferPayloadReaderFactory;
-    }
+    private array $rows = [];
+
+    private bool $isComplete = false;
+
+    private ?int $columnCount = null;
+
+    private ?Result $finalResult = null;
+
+    private ?BufferPayloadReaderFactory $readerFactory = null;
+
+    private ParserState $state = ParserState::INIT;
 
     public function processPayload(string $rawPayload): void
     {
@@ -34,16 +37,20 @@ final class ResultSetParser
             return;
         }
 
-        $reader = $this->readerFactory->createFromString($rawPayload);
+        $reader = $this->getReader($rawPayload);
         $firstByte = \ord($rawPayload[0]);
 
-        if ($this->isEofPacketDuringRows($firstByte, $rawPayload)) {
-            $this->completeResultSet();
+        if ($this->isEndOfResultSet($firstByte, $rawPayload)) {
+            $this->markComplete();
 
             return;
         }
 
-        $this->processPayloadByState($reader, $firstByte, $rawPayload);
+        match ($this->state) {
+            ParserState::INIT => $this->handleInitState($reader),
+            ParserState::COLUMNS => $this->handleColumnsState($reader, $firstByte, $rawPayload),
+            ParserState::ROWS => $this->handleRowsState($reader),
+        };
     }
 
     public function isComplete(): bool
@@ -51,83 +58,79 @@ final class ResultSetParser
         return $this->isComplete;
     }
 
-    public function getResult(): mixed
+    public function getResult(): Result
     {
-        return $this->finalResult;
+        return $this->finalResult ?? new Result([]);
     }
 
-    private function isEofPacketDuringRows(int $firstByte, string $rawPayload): bool
+    /**
+     * Reset the parser state for reuse
+     */
+    public function reset(): void
     {
-        return $this->state === self::STATE_ROWS &&
-            $this->isEofPacket($firstByte, $rawPayload);
+        $this->state = ParserState::INIT;
+        $this->columnCount = null;
+        $this->columns = [];
+        $this->rows = [];
+        $this->isComplete = false;
+        $this->finalResult = null;
+        $this->readerFactory = null;
+    }
+
+    private function getReader(string $rawPayload): PayloadReader
+    {
+        $this->readerFactory ??= new BufferPayloadReaderFactory;
+
+        return $this->readerFactory->createFromString($rawPayload);
+    }
+
+    private function isEndOfResultSet(int $firstByte, string $rawPayload): bool
+    {
+        return $this->state === ParserState::ROWS
+            && $this->isEofPacket($firstByte, $rawPayload);
     }
 
     private function isEofPacket(int $firstByte, string $rawPayload): bool
     {
-        return $firstByte === self::EOF_PACKET_MARKER &&
-            \strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
+        return $firstByte === PacketMarker::EOF->value
+            && \strlen($rawPayload) < self::EOF_PACKET_MAX_LENGTH;
     }
 
-    private function completeResultSet(): void
+    private function markComplete(): void
     {
         $this->finalResult = new Result($this->rows);
         $this->isComplete = true;
+        $this->columns = [];
+        $this->readerFactory = null;
     }
 
-    private function processPayloadByState($reader, int $firstByte, string $rawPayload): void
-    {
-        switch ($this->state) {
-            case self::STATE_INIT:
-                $this->processInitialPayload($reader);
-
-                break;
-
-            case self::STATE_COLUMNS:
-                $this->processColumnPayload($reader, $firstByte, $rawPayload);
-
-                break;
-
-            case self::STATE_ROWS:
-                $this->processRowPayload($reader);
-
-                break;
-        }
-    }
-
-    private function processInitialPayload($reader): void
+    private function handleInitState(PayloadReader $reader): void
     {
         $this->columnCount = $reader->readLengthEncodedIntegerOrNull();
-        $this->state = self::STATE_COLUMNS;
+        $this->state = ParserState::COLUMNS;
     }
 
-    private function processColumnPayload($reader, int $firstByte, string $rawPayload): void
-    {
+    private function handleColumnsState(
+        PayloadReader $reader,
+        int $firstByte,
+        string $rawPayload
+    ): void {
         if ($this->isEofPacket($firstByte, $rawPayload)) {
-            $this->transitionToRowsState();
+            $this->state = ParserState::ROWS;
 
             return;
         }
 
-        $this->addColumnDefinition($reader);
-    }
-
-    private function transitionToRowsState(): void
-    {
-        $this->state = self::STATE_ROWS;
-    }
-
-    private function addColumnDefinition($reader): void
-    {
         $this->columns[] = ColumnDefinition::fromPayload($reader);
     }
 
-    private function processRowPayload($reader): void
+    private function handleRowsState(PayloadReader $reader): void
     {
-        $row = $this->buildRowFromColumns($reader);
+        $row = $this->parseRow($reader);
         $this->rows[] = $row;
     }
 
-    private function buildRowFromColumns($reader): array
+    private function parseRow(PayloadReader $reader): array
     {
         $row = [];
 

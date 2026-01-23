@@ -123,3 +123,25 @@ function buildMockRowPacket(int $columnCount, array $columnTypes = [], array $va
 
     return $packet;
 }
+
+function buildMockTextRowPacket(array $values): string
+{
+    $packet = '';
+    
+    foreach ($values as $value) {
+        if ($value === null) {
+            $packet .= "\xfb";
+        } else {
+            $length = strlen($value);
+            if ($length < 251) {
+                $packet .= pack('C', $length) . $value;
+            } elseif ($length < 65536) {
+                $packet .= "\xfc" . pack('v', $length) . $value;
+            } else {
+                $packet .= "\xfd" . substr(pack('V', $length), 0, 3) . $value;
+            }
+        }
+    }
+    
+    return $packet;
+}
