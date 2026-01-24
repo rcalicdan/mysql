@@ -10,7 +10,11 @@
         }
     },
     "require": {
-        "rcalicdan/mysql-binary-protocol": "^1.0"
+        "rcalicdan/mysql-binary-protocol": "^1.0",
+        "hiblaphp/event-loop":"dev-main",
+        "hiblaphp/promise":"dev-main",
+        "hiblaphp/stream":"dev-main",
+        "hiblaphp/socket":"dev-main"
     },
     "require-dev": {
        "pestphp/pest": "^4.0"
@@ -19,5 +23,7 @@
         "allow-plugins": {
             "pestphp/pest-plugin": true
         }
-    }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
 }
