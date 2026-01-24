@@ -7,7 +7,6 @@ use Hibla\MysqlClient\Enums\ConnectionState;
 use Hibla\MysqlClient\Enums\PacketMarker;
 use Hibla\MysqlClient\Handlers\RequestQueueHandler;
 use Hibla\MysqlClient\Interfaces\ConnectionInterface;
-use Hibla\MysqlClient\Interfaces\StatementInterface;
 use Hibla\MysqlClient\Protocols\PacketBuilder;
 use Hibla\MysqlClient\Protocols\ResultSetParser;
 use Hibla\MysqlClient\ValueObjects\ConnectionParams;
@@ -15,7 +14,8 @@ use Hibla\MysqlClient\ValueObjects\ErrPacket;
 use Hibla\MysqlClient\ValueObjects\OkPacket;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Hibla\Socket\Connection as SocketConnection;
+use Hibla\Socket\Internals\StreamEncryption;
 use Rcalicdan\MySQLBinaryProtocol\Constants\CapabilityFlags;
 use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeParser;
@@ -35,7 +35,8 @@ final class Connection implements ConnectionInterface
         | CapabilityFlags::CLIENT_TRANSACTIONS
         | CapabilityFlags::CLIENT_MULTI_RESULTS
         | CapabilityFlags::CLIENT_PS_MULTI_RESULTS
-        | CapabilityFlags::CLIENT_DEPRECATE_EOF;
+        | CapabilityFlags::CLIENT_DEPRECATE_EOF
+        | CapabilityFlags::CLIENT_SSL; 
 
     private ConnectionState $state = ConnectionState::DISCONNECTED;
     private PacketReader $packetReader;
@@ -46,6 +47,8 @@ final class Connection implements ConnectionInterface
     private ?HandshakeV10 $handshake = null;
     private ?SocketConnection $stream = null;
     private ?Promise $authPromise = null;
+    private bool $sslEnabled = false;
+    private bool $sslRequested = false;
 
     public function __construct(
         private readonly ConnectionParams $params
@@ -56,9 +59,6 @@ final class Connection implements ConnectionInterface
         $this->requestQueue = new RequestQueueHandler();
     }
 
-    /**
-     * Get a promise that resolves when authentication completes
-     */
     public function waitForAuthentication(): Promise
     {
         if ($this->authPromise === null) {
@@ -180,11 +180,52 @@ final class Connection implements ConnectionInterface
             new HandshakeV10Builder(),
             function (HandshakeV10 $handshake): void {
                 $this->handshake = $handshake;
-                $this->sendAuthResponse();
+                
+                if ($this->params->useSsl() 
+                    && ($handshake->capabilities & CapabilityFlags::CLIENT_SSL)) {
+                    $this->requestSsl();
+                } else {
+                    // No SSL - send auth directly
+                    $this->sendAuthResponse();
+                }
             }
         );
         
         $parser($reader);
+    }
+
+    private function requestSsl(): void
+    {
+        if ($this->handshake === null) {
+            throw new \RuntimeException('No handshake received');
+        }
+        
+        // Send SSL request packet
+        $packet = $this->packetBuilder->buildSslRequest();
+        $this->sendPacket($packet);
+        
+        $this->sslRequested = true;
+        
+        // Pause reading to perform TLS upgrade
+        $this->stream->pause();
+        
+        // Upgrade to TLS
+        $encryption = new StreamEncryption(isServer: false);
+        
+        $encryption->enable($this->stream)
+            ->then(function (SocketConnection $secureStream): void {
+                $this->sslEnabled = true;
+                $this->stream->resume();
+                
+                // Now send authentication over encrypted connection
+                $this->sendAuthResponse();
+            })
+            ->catch(function (\Throwable $error): void {
+                if ($this->authPromise !== null) {
+                    $this->authPromise->reject($error);
+                }
+                $this->stream?->close();
+            });
     }
 
     private function sendAuthResponse(): void
@@ -207,7 +248,6 @@ final class Connection implements ConnectionInterface
             // Authentication successful
             $this->state = ConnectionState::READY;
             
-            // Resolve the auth promise
             if ($this->authPromise !== null) {
                 $this->authPromise->resolve($this);
             }
@@ -221,14 +261,64 @@ final class Connection implements ConnectionInterface
             }
             
             $this->stream?->close();
+            
+        } elseif ($firstByte === 0x01) {
+            // Auth continuation for caching_sha2_password
+            $authContinue = \ord($reader->readFixedString(1));
+            
+            if ($authContinue === 0x03) {
+                // Fast auth success - server has cached password
+                $this->state = ConnectionState::READY;
+                
+                if ($this->authPromise !== null) {
+                    $this->authPromise->resolve($this);
+                }
+            } elseif ($authContinue === 0x04) {
+                // Server requests full password
+                if ($this->sslEnabled) {
+                    // Safe to send password over TLS
+                    $this->sendClearTextPassword();
+                } else {
+                    // No SSL - cannot send password securely
+                    $error = new \RuntimeException(
+                        'Server requires full password but SSL is not enabled. ' .
+                        'Enable SSL or use mysql_native_password authentication.'
+                    );
+                    
+                    if ($this->authPromise !== null) {
+                        $this->authPromise->reject($error);
+                    }
+                    
+                    $this->stream?->close();
+                }
+            } else {
+                $error = new \RuntimeException('Unknown auth continue: 0x' . dechex($authContinue));
+                
+                if ($this->authPromise !== null) {
+                    $this->authPromise->reject($error);
+                }
+            }
+            
         } else {
-            // Additional auth steps
             $error = new \RuntimeException('Unexpected auth response: 0x' . dechex($firstByte));
             
             if ($this->authPromise !== null) {
                 $this->authPromise->reject($error);
             }
         }
+    }
+
+    private function sendClearTextPassword(): void
+    {
+        if ($this->stream === null) {
+            throw new \RuntimeException('Not connected');
+        }
+        
+        // Send password as null-terminated string
+        $password = $this->params->password . "\x00";
+        $this->sendPacket($password);
+        
+        // Stay in AUTHENTICATING state to receive the OK packet
     }
 
     private function handleQueryResponse(PayloadReader $reader, int $length): void

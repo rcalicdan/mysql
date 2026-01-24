@@ -4,7 +4,7 @@ namespace Hibla\MysqlClient\ValueObjects;
 
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
-final readonly class ErrPacket extends \Exception
+final class ErrPacket extends \Exception
 {
     public function __construct(
         public int $errorCode,
