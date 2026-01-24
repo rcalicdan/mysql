@@ -1,23 +1,17 @@
 <?php
 
-namespace Hibla\MysqlClient\Packets;
+namespace Hibla\MysqlClient\ValueObjects;
 
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
-final class StmtPrepareOkPacket
+final readonly class StmtPrepareOkPacket
 {
-    public int $statementId;
-    public int $numColumns;
-    public int $numParams;
-    public int $warningCount;
-
-    public function __construct(int $statementId, int $numColumns, int $numParams, int $warningCount)
-    {
-        $this->statementId = $statementId;
-        $this->numColumns = $numColumns;
-        $this->numParams = $numParams;
-        $this->warningCount = $warningCount;
-    }
+    public function __construct(
+        public int $statementId,
+        public int $numColumns,
+        public int $numParams,
+        public int $warningCount,
+    ) {}
 
     public static function fromPayload(PayloadReader $reader): self
     {

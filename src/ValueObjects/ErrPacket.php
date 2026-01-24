@@ -1,14 +1,18 @@
 <?php
 
-namespace Hibla\MysqlClient\Protocols;
+namespace Hibla\MysqlClient\ValueObjects;
 
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
-final class ErrPacket extends \Exception
+final readonly class ErrPacket extends \Exception
 {
-    public int $errorCode;
-    public string $sqlState;
-    public string $errorMessage;
+    public function __construct(
+        public int $errorCode,
+        public string $sqlState,
+        public string $errorMessage,
+    ) {
+        parent::__construct($errorMessage, $errorCode);
+    }
 
     public static function fromPayload(PayloadReader $reader): self
     {
@@ -18,11 +22,6 @@ final class ErrPacket extends \Exception
         $sqlState = $reader->readFixedString(5);
         $errorMessage = $reader->readRestOfPacketString();
 
-        $packet = new self($errorMessage, $errorCode);
-        $packet->errorCode = $errorCode;
-        $packet->sqlState = $sqlState;
-        $packet->errorMessage = $errorMessage;
-
-        return $packet;
+        return new self($errorCode, $sqlState, $errorMessage);
     }
 }
