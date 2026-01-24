@@ -2,13 +2,21 @@
 
 namespace Hibla\MysqlClient\Enums;
 
-enum ConnectionState
+enum ConnectionState: string
 {
-    case DISCONNECTED;
-    case HANDSHAKING;
-    case AUTHENTICATING;
-    case READY;
-    case QUERYING;
-    case CLOSING;
-    case CLOSED;
+    case DISCONNECTED = 'disconnected';
+
+    case CONNECTING = 'connecting';
+
+    case HANDSHAKING = 'handshaking';
+
+    case AUTHENTICATING = 'authenticating';
+
+    case READY = 'ready';
+
+    case QUERYING = 'querying';
+    
+    case CLOSING = 'closing';
+
+    case CLOSED = 'closed';
 }
