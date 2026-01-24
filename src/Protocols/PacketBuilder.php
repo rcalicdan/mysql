@@ -25,14 +25,6 @@ final class PacketBuilder
             . $this->buildAuthPluginSection();
     }
 
-    public function buildSslRequest(): string
-    {
-        return pack('V', $this->clientCapabilities)
-            . pack('V', 0x01000000)  
-            . pack('C', 45)          
-            . str_repeat("\x00", 23); 
-    }
-
     public function buildQueryPacket(string $sql): string
     {
         return Command::QUERY->value . $sql;
