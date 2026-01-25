@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Hibla\MysqlClient\Enums;
 
 enum ConnectionState: string
@@ -15,7 +17,7 @@ enum ConnectionState: string
     case READY = 'ready';
 
     case QUERYING = 'querying';
-    
+
     case CLOSING = 'closing';
 
     case CLOSED = 'closed';

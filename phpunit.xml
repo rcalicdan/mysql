@@ -10,4 +10,11 @@
             <directory>src</directory>
         </include>
     </source>
+    <php>
+        <env name="MYSQL_HOST" value="127.0.0.1" force="true"/>
+        <env name="MYSQL_PORT" value="3306" force="true"/>
+        <env name="MYSQL_DATABASE" value="test" force="true"/>
+        <env name="MYSQL_USERNAME" value="test_user" force="true"/>
+        <env name="MYSQL_PASSWORD" value="test_password" force="true"/>
+    </php>
 </phpunit>

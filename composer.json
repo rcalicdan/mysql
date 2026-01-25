@@ -10,14 +10,15 @@
         }
     },
     "require": {
-        "rcalicdan/mysql-binary-protocol": "^2.0",
+        "rcalicdan/mysql-binary-protocol": "dev-main",
         "hiblaphp/event-loop":"dev-main",
         "hiblaphp/promise":"dev-main",
         "hiblaphp/stream":"dev-main",
         "hiblaphp/socket":"dev-main"
     },
     "require-dev": {
-       "pestphp/pest": "^4.0"
+       "pestphp/pest": "^4.0",
+       "mockery/mockery": "^1.0"
     },
     "config": {
         "allow-plugins": {
