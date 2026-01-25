@@ -22,8 +22,8 @@ class Result implements \IteratorAggregate
     public function __construct(
         private readonly array $rows
     ) {
-        $this->rowCount = count($this->rows);
-        $this->columnCount = $this->rowCount > 0 ? count($this->rows[0]) : 0;
+        $this->rowCount = \count($this->rows);
+        $this->columnCount = $this->rowCount > 0 ? \count($this->rows[0]) : 0;
     }
 
     /**
