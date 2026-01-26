@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Hibla\MysqlClient\Interfaces;
 
 use Hibla\MysqlClient\Enums\ConnectionState;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\PreparedStatement;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
+use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 
 /**
@@ -17,25 +18,31 @@ interface ConnectionInterface
     /**
      * Establish connection to the MySQL server.
      *
-     * @return PromiseInterface<ConnectionInterface>
+     * @return PromiseInterface<self>
      */
     public function connect(): PromiseInterface;
 
     /**
-     * Execute a SELECT query that returns rows.
-     *
-     * @param string $sql The SQL SELECT query to execute
+     * @param string $sql The SQL query to execute
      * @return PromiseInterface<QueryResult>
      */
     public function query(string $sql): PromiseInterface;
 
     /**
-     * Execute a write operation (INSERT, UPDATE, DELETE, etc.).
-     *
+     * Execute a SQL statement.
+     * 
      * @param string $sql The SQL command to execute
      * @return PromiseInterface<ExecuteResult>
      */
     public function execute(string $sql): PromiseInterface;
+
+    /**
+     * Prepare a SQL statement for execution.
+     *
+     * @param string $sql The SQL statement with placeholders (?)
+     * @return PromiseInterface<PreparedStatement>
+     */
+    public function prepare(string $sql): PromiseInterface;
 
     /**
      * Ping the server to check if connection is alive.

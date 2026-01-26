@@ -23,9 +23,8 @@ final class PingHandler
     public function start(Promise $promise): void
     {
         $this->currentPromise = $promise;
-        $this->sequenceId = 0; // Commands reset sequence to 0
+        $this->sequenceId = 0;
 
-        // Standard MySQL COM_PING packet is just 1 byte: 0x0E
         $payload = \chr(0x0E); 
         $this->writePacket($payload);
     }
@@ -33,20 +32,19 @@ final class PingHandler
     public function processPacket(PayloadReader $reader, int $length, int $seq): bool
     {
         try {
-            // PING Response is standard: OK or ERR
             $responseParser = new ResponseParser();
             $frame = $responseParser->parseResponse($reader, $length, $seq);
 
             if ($frame instanceof OkPacket) {
                 $this->currentPromise?->resolve(true);
-                return true; // Finished
+                return true; 
             }
 
             if ($frame instanceof ErrPacket) {
                 $this->currentPromise?->reject(
                     new \RuntimeException("Ping failed: {$frame->errorMessage}")
                 );
-                return true; // Finished
+                return true; 
             }
 
             throw new \RuntimeException("Unexpected packet type in ping response");

@@ -23,4 +23,8 @@ enum ConnectionState: string
     case CLOSED = 'closed';
 
     case PINGING = 'pinging';
+
+    case PREPARING = 'preparing';
+
+    case EXECUTING = 'executing';
 }
