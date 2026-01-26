@@ -1,0 +1,66 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Hibla\MysqlClient\Handlers;
+
+use Hibla\Promise\Promise;
+use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
+use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
+
+final class PingHandler
+{
+    private ?Promise $currentPromise = null;
+    private int $sequenceId = 0;
+    
+    public function __construct(
+        private readonly SocketConnection $socket
+    ) {}
+
+    public function start(Promise $promise): void
+    {
+        $this->currentPromise = $promise;
+        $this->sequenceId = 0; // Commands reset sequence to 0
+
+        // Standard MySQL COM_PING packet is just 1 byte: 0x0E
+        $payload = \chr(0x0E); 
+        $this->writePacket($payload);
+    }
+
+    public function processPacket(PayloadReader $reader, int $length, int $seq): bool
+    {
+        try {
+            // PING Response is standard: OK or ERR
+            $responseParser = new ResponseParser();
+            $frame = $responseParser->parseResponse($reader, $length, $seq);
+
+            if ($frame instanceof OkPacket) {
+                $this->currentPromise?->resolve(true);
+                return true; // Finished
+            }
+
+            if ($frame instanceof ErrPacket) {
+                $this->currentPromise?->reject(
+                    new \RuntimeException("Ping failed: {$frame->errorMessage}")
+                );
+                return true; // Finished
+            }
+
+            throw new \RuntimeException("Unexpected packet type in ping response");
+        } catch (\Throwable $e) {
+            $this->currentPromise?->reject($e);
+            return true;
+        }
+    }
+
+    private function writePacket(string $payload): void
+    {
+        $len = \strlen($payload);
+        $header = substr(pack('V', $len), 0, 3) . \chr($this->sequenceId);
+        $this->socket->write($header . $payload);
+        $this->sequenceId++;
+    }
+}

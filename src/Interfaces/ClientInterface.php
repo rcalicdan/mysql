@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\MysqlClient\Interfaces;
 
-use Hibla\MysqlClient\ValueObjects\Result;
+use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\ValueObjects\ExecuteResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 
@@ -20,7 +21,7 @@ interface ClientInterface
      * Execute a SQL query that returns rows.
      *
      * @param string $sql The SQL query to execute
-     * @return PromiseInterface<Result> Resolves with query results
+     * @return PromiseInterface<QueryResult> Resolves with query results
      */
     public function query(string $sql): PromiseInterface;
 
@@ -28,7 +29,7 @@ interface ClientInterface
      * Execute a SQL command that doesn't return rows.
      *
      * @param string $sql The SQL command to execute
-     * @return PromiseInterface<OkPacket> Resolves with execution metadata
+     * @return PromiseInterface<ExecuteResult> Resolves with execution metadata
      */
     public function execute(string $sql): PromiseInterface;
 
