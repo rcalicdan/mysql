@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Hibla\MysqlClient\Handlers;
 
 use Hibla\MysqlClient\Enums\ExecuteState;
-use Hibla\MysqlClient\ValueObjects\ExecuteResult;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\Internals\ExecuteResult;
+use Hibla\MysqlClient\Internals\QueryResult;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Rcalicdan\MySQLBinaryProtocol\Constants\MysqlType;

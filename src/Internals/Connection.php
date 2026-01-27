@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient;
+namespace Hibla\MysqlClient\Internals;
 
 use Hibla\MysqlClient\Enums\ConnectionState;
 use Hibla\MysqlClient\Enums\IsolationLevel;
@@ -11,11 +11,10 @@ use Hibla\MysqlClient\Handlers\HandshakeHandler;
 use Hibla\MysqlClient\Handlers\PingHandler;
 use Hibla\MysqlClient\Handlers\PrepareHandler;
 use Hibla\MysqlClient\Handlers\QueryHandler;
-use Hibla\MysqlClient\Interfaces\ConnectionInterface;
 use Hibla\MysqlClient\ValueObjects\CommandRequest;
 use Hibla\MysqlClient\ValueObjects\ConnectionParams;
-use Hibla\MysqlClient\ValueObjects\ExecuteResult;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\Internals\ExecuteResult;
+use Hibla\MysqlClient\Internals\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
@@ -25,7 +24,10 @@ use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
-class MysqlConnection implements ConnectionInterface
+/**
+ * @internal Used internally by the connection pool
+ */
+class Connection
 {
     private readonly ConnectionParams $params;
     private ConnectionState $state = ConnectionState::DISCONNECTED;
@@ -51,9 +53,8 @@ class MysqlConnection implements ConnectionInterface
             \is_array($config) => ConnectionParams::fromArray($config),
             \is_string($config) => ConnectionParams::fromUri($config),
         };
-        $this->commandQueue = new \SplQueue();
 
-        register_shutdown_function([$this, 'close']);
+        $this->commandQueue = new \SplQueue();
     }
 
     /**
@@ -69,7 +70,9 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Establish connection to the MySQL server.
+     *
+     * @return PromiseInterface<self>
      */
     public function connect(): PromiseInterface
     {
@@ -93,7 +96,8 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * @param string $sql The SQL query to execute
+     * @return PromiseInterface<QueryResult>
      */
     public function query(string $sql): PromiseInterface
     {
@@ -101,7 +105,10 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Execute a SQL statement.
+     *
+     * @param string $sql The SQL command to execute
+     * @return PromiseInterface<ExecuteResult>
      */
     public function execute(string $sql): PromiseInterface
     {
@@ -109,7 +116,10 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Begin a transaction.
+     *
+     * @param IsolationLevel|null $isolationLevel Optional isolation level for this transaction
+     * @return PromiseInterface<Transaction>
      */
     public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
     {
@@ -126,7 +136,10 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Prepare a SQL statement for execution.
+     *
+     * @param string $sql The SQL statement with placeholders (?)
+     * @return PromiseInterface<PreparedStatement>
      */
     public function prepare(string $sql): PromiseInterface
     {
@@ -134,13 +147,18 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Ping the server to check if connection is alive.
+     *
+     * @return PromiseInterface<bool>
      */
     public function ping(): PromiseInterface
     {
         return $this->enqueueCommand(CommandRequest::TYPE_PING);
     }
 
+    /**
+     * Close the connection gracefully.
+     */
     public function close(): void
     {
         if ($this->state === ConnectionState::CLOSED) {
@@ -179,7 +197,7 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Get the current connection state.
      */
     public function getState(): ConnectionState
     {
@@ -187,7 +205,7 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Check if the connection is ready to execute queries.
      */
     public function isReady(): bool
     {
@@ -195,7 +213,7 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * {@inheritDoc}
+     * Check if the connection is closed.
      */
     public function isClosed(): bool
     {
@@ -451,10 +469,5 @@ class MysqlConnection implements ConnectionInterface
         if ($this->currentCommand) {
             $this->currentCommand->promise->reject($exception);
         }
-    }
-
-    public function __destruct()
-    {
-        $this->close();
     }
 }

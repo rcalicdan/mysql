@@ -7,8 +7,8 @@ namespace Hibla\MysqlClient\Interfaces;
 use Hibla\MysqlClient\Enums\IsolationLevel;
 use Hibla\MysqlClient\PreparedStatement;
 use Hibla\MysqlClient\Transaction;
-use Hibla\MysqlClient\ValueObjects\ExecuteResult;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\Internals\ExecuteResult;
+use Hibla\MysqlClient\Internals\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 

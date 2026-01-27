@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\ValueObjects;
+namespace Hibla\MysqlClient\Internals;
 
 /**
  * Represents the result of a SELECT query that returns rows.

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient;
+namespace Hibla\MysqlClient\Internals;
 
-use Hibla\MysqlClient\Interfaces\ConnectionInterface;
-use Hibla\MysqlClient\ValueObjects\ExecuteResult;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\Internals\Connection as MysqlConnection;
+use Hibla\MysqlClient\Internals\ExecuteResult;
+use Hibla\MysqlClient\Internals\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 
 class Transaction
@@ -14,11 +14,8 @@ class Transaction
     private bool $active = true;
 
     public function __construct(
-        private readonly ConnectionInterface $connection
+        private readonly MysqlConnection $connection
     ) {
-        register_shutdown_function(function () {
-            $this->connection->close();
-        });
     }
 
     /**
@@ -173,9 +170,4 @@ class Transaction
 
         return '`' . str_replace('`', '``', $identifier) . '`';
     }
-
-    // public function __destruct()
-    // {
-    //     $this->connection->close();
-    // }
 }

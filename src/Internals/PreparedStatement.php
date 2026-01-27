@@ -2,13 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient;
+namespace Hibla\MysqlClient\Internals;
 
-use Hibla\MysqlClient\ValueObjects\ExecuteResult;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
+use Hibla\MysqlClient\Internals\ExecuteResult;
+use Hibla\MysqlClient\Internals\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
+use Hibla\MysqlClient\Internals\Connection as MysqlConnection;
 
 class PreparedStatement
 {
@@ -30,7 +31,6 @@ class PreparedStatement
         public readonly array $columnDefinitions = [],
         public readonly array $paramDefinitions = []
     ) {
-        register_shutdown_function([$this, 'close']);
     }
 
     /**
