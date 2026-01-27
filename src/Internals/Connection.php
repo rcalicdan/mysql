@@ -84,7 +84,14 @@ class Connection
         $this->connectPromise = new Promise();
         $this->isUserClosing = false;
 
-        $connector = $this->connector ?? new Connector();
+        $connector = $this->connector ?? new Connector([
+            'tcp' => true,
+            'tls' => false,
+            'unix' => false,
+            'dns' => true,           
+            'happy_eyeballs' => false, 
+        ]);
+
         $socketUri = \sprintf('tcp://%s:%d', $this->params->host, $this->params->port);
 
         $connector->connect($socketUri)->then(
@@ -125,13 +132,13 @@ class Connection
     {
         if ($isolationLevel === null) {
             return $this->query('START TRANSACTION')->then(
-                fn () => new Transaction($this)
+                fn() => new Transaction($this)
             );
         }
 
         return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
-            ->then(fn () => $this->query('START TRANSACTION'))
-            ->then(fn () => new Transaction($this))
+            ->then(fn() => $this->query('START TRANSACTION'))
+            ->then(fn() => new Transaction($this))
         ;
     }
 
