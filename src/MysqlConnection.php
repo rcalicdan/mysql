@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hibla\MysqlClient;
 
 use Hibla\MysqlClient\Enums\ConnectionState;
-use Hibla\MysqlClient\Enums\TransactionIsolationLevel;
+use Hibla\MysqlClient\Enums\IsolationLevel;
 use Hibla\MysqlClient\Handlers\ExecuteHandler;
 use Hibla\MysqlClient\Handlers\HandshakeHandler;
 use Hibla\MysqlClient\Handlers\PingHandler;
@@ -111,7 +111,7 @@ class MysqlConnection implements ConnectionInterface
     /**
      * {@inheritDoc}
      */
-    public function beginTransaction(?TransactionIsolationLevel $isolationLevel = null): PromiseInterface
+    public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
     {
         if ($isolationLevel === null) {
             return $this->query('START TRANSACTION')->then(

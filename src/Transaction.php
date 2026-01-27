@@ -16,6 +16,9 @@ class Transaction
     public function __construct(
         private readonly ConnectionInterface $connection
     ) {
+        register_shutdown_function(function () {
+            $this->connection->close();
+        });
     }
 
     /**
@@ -170,4 +173,9 @@ class Transaction
 
         return '`' . str_replace('`', '``', $identifier) . '`';
     }
+
+    // public function __destruct()
+    // {
+    //     $this->connection->close();
+    // }
 }

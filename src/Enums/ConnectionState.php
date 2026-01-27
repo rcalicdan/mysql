@@ -18,8 +18,6 @@ enum ConnectionState: string
 
     case QUERYING = 'querying';
 
-    case CLOSING = 'closing';
-
     case CLOSED = 'closed';
 
     case PINGING = 'pinging';

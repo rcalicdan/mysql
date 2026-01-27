@@ -7,10 +7,13 @@ namespace Hibla\MysqlClient\Enums;
 /**
  * Defines the standard transaction isolation levels for MySQL.
  */
-enum TransactionIsolationLevel: string
+enum IsolationLevel: string
 {
     case READ_UNCOMMITTED = 'READ UNCOMMITTED';
+
     case READ_COMMITTED = 'READ COMMITTED';
+
     case REPEATABLE_READ = 'REPEATABLE READ';
+    
     case SERIALIZABLE = 'SERIALIZABLE';
 }

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Hibla\MysqlClient\Interfaces;
 
-use Hibla\MysqlClient\Enums\TransactionIsolationLevel;
+use Hibla\MysqlClient\Enums\IsolationLevel;
 use Hibla\MysqlClient\PreparedStatement;
 use Hibla\MysqlClient\Transaction;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
@@ -47,10 +47,10 @@ interface ClientInterface
     /**
      * Begin a transaction.
      *
-     * @param TransactionIsolationLevel|null $isolationLevel Optional isolation level for this transaction
+     * @param IsolationLevel|null $isolationLevel Optional isolation level for this transaction
      * @return PromiseInterface<Transaction>
      */
-    public function beginTransaction(?TransactionIsolationLevel $isolationLevel = null): PromiseInterface;
+    public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface;
 
     /**
      * Commit the current transaction.
