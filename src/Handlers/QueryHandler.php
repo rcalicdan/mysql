@@ -9,6 +9,7 @@ use Hibla\MysqlClient\ValueObjects\ExecuteResult;
 use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\EofPacket;
@@ -147,35 +148,17 @@ final class QueryHandler
 
     private function readLengthEncodedStringWithFirstByte(PayloadReader $reader, int $firstByte): ?string
     {
-        if ($firstByte === 0xFB) {
-            return null;
-        }
-
-        if ($firstByte < 0xFB) {
-            return $reader->readFixedString($firstByte);
-        }
-
-        if ($firstByte === 0xFC) {
-            $length = $reader->readFixedInteger(2);
-
-            return $reader->readFixedString((int)$length);
-        }
-
-        if ($firstByte === 0xFD) {
-            $length = $reader->readFixedInteger(3);
-
-            return $reader->readFixedString((int)$length);
-        }
-
-        if ($firstByte === 0xFE) {
-            $length = $reader->readFixedInteger(8);
-
-            return $reader->readFixedString((int)$length);
-        }
-
-        throw new \RuntimeException(
-            \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte)
-        );
+        return match ($firstByte) {
+            LengthEncodedType::NULL_MARKER => null,
+            LengthEncodedType::INT16_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(2)),
+            LengthEncodedType::INT24_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(3)),
+            LengthEncodedType::INT64_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(8)),
+            default => $firstByte < LengthEncodedType::NULL_MARKER
+                ? $reader->readFixedString($firstByte)
+                : throw new \RuntimeException(
+                    \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte)
+                ),
+        };
     }
 
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
@@ -207,7 +190,7 @@ final class QueryHandler
     private function writePacket(string $payload): void
     {
         $len = \strlen($payload);
-        $header = substr(pack('V', $len), 0, 3) . chr($this->sequenceId);
+        $header = substr(pack('V', $len), 0, 3) . \chr($this->sequenceId);
         $this->socket->write($header . $payload);
         $this->sequenceId++;
     }

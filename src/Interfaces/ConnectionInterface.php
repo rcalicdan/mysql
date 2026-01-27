@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Hibla\MysqlClient\Interfaces;
 
 use Hibla\MysqlClient\Enums\ConnectionState;
+use Hibla\MysqlClient\Enums\TransactionIsolationLevel;
 use Hibla\MysqlClient\PreparedStatement;
+use Hibla\MysqlClient\Transaction;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
 use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
@@ -43,6 +45,14 @@ interface ConnectionInterface
      * @return PromiseInterface<PreparedStatement>
      */
     public function prepare(string $sql): PromiseInterface;
+
+    /**
+     * Begin a transaction.
+     *
+     * @param TransactionIsolationLevel|null $isolationLevel Optional isolation level for this transaction
+     * @return PromiseInterface<Transaction>
+     */
+    public function beginTransaction(?TransactionIsolationLevel $isolationLevel = null): PromiseInterface;
 
     /**
      * Ping the server to check if connection is alive.

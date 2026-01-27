@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Hibla\MysqlClient\Interfaces;
 
+use Hibla\MysqlClient\Enums\TransactionIsolationLevel;
+use Hibla\MysqlClient\PreparedStatement;
+use Hibla\MysqlClient\Transaction;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
 use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
@@ -37,16 +40,17 @@ interface ClientInterface
      * Prepare a SQL statement for repeated execution.
      *
      * @param string $sql The SQL statement with ? placeholders
-     * @return PromiseInterface<PreparedStatementInterface> Resolves with prepared statement
+     * @return PromiseInterface<PreparedStatement> Resolves with prepared statement
      */
     public function prepare(string $sql): PromiseInterface;
 
     /**
      * Begin a transaction.
      *
-     * @return PromiseInterface<OkPacket>
+     * @param TransactionIsolationLevel|null $isolationLevel Optional isolation level for this transaction
+     * @return PromiseInterface<Transaction>
      */
-    public function beginTransaction(): PromiseInterface;
+    public function beginTransaction(?TransactionIsolationLevel $isolationLevel = null): PromiseInterface;
 
     /**
      * Commit the current transaction.

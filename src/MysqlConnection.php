@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hibla\MysqlClient;
 
 use Hibla\MysqlClient\Enums\ConnectionState;
+use Hibla\MysqlClient\Enums\TransactionIsolationLevel;
 use Hibla\MysqlClient\Handlers\ExecuteHandler;
 use Hibla\MysqlClient\Handlers\HandshakeHandler;
 use Hibla\MysqlClient\Handlers\PingHandler;
@@ -51,7 +52,7 @@ class MysqlConnection implements ConnectionInterface
             \is_string($config) => ConnectionParams::fromUri($config),
         };
         $this->commandQueue = new \SplQueue();
-        
+
         register_shutdown_function([$this, 'close']);
     }
 
@@ -110,6 +111,23 @@ class MysqlConnection implements ConnectionInterface
     /**
      * {@inheritDoc}
      */
+    public function beginTransaction(?TransactionIsolationLevel $isolationLevel = null): PromiseInterface
+    {
+        if ($isolationLevel === null) {
+            return $this->query('START TRANSACTION')->then(
+                fn () => new Transaction($this)
+            );
+        }
+
+        return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
+            ->then(fn () => $this->query('START TRANSACTION'))
+            ->then(fn () => new Transaction($this))
+        ;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     public function prepare(string $sql): PromiseInterface
     {
         return $this->enqueueCommand(CommandRequest::TYPE_PREPARE, $sql);
@@ -133,12 +151,7 @@ class MysqlConnection implements ConnectionInterface
         $this->state = ConnectionState::CLOSED;
 
         if ($this->socket) {
-            try {
-                $this->socket->close();
-            } catch (\Throwable $e) {
-                // Ignore errors during close, as we are shutting down anyway
-            }
-
+            $this->socket->close();
             $this->socket = null;
         }
 
@@ -159,7 +172,7 @@ class MysqlConnection implements ConnectionInterface
             $this->currentCommand = null;
         }
 
-        while (!$this->commandQueue->isEmpty()) {
+        while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
             $cmd->promise->reject(new \RuntimeException('Connection closed by user'));
         }
@@ -194,7 +207,7 @@ class MysqlConnection implements ConnectionInterface
     // ================================================================================================================
 
     /**
-     * Internal: Called by PreparedStatement to execute bound parameters.
+     * @internal Called by PreparedStatement to execute bound parameters.
      * @return PromiseInterface<ExecuteResult|QueryResult>
      */
     public function executeStatement(PreparedStatement $stmt, array $params): PromiseInterface
@@ -209,7 +222,7 @@ class MysqlConnection implements ConnectionInterface
     }
 
     /**
-     * Internal: Called by PreparedStatement to close itself.
+     * @internal Called by PreparedStatement to close itself.
      * @return PromiseInterface<void>
      */
     public function closeStatement(int $stmtId): PromiseInterface

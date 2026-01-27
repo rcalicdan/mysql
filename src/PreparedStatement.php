@@ -39,10 +39,10 @@ class PreparedStatement
      * @param array<int, mixed> $params The parameters to bind to the statement.
      * @return PromiseInterface<ExecuteResult|QueryResult>
      */
-    public function execute(array $params = []): PromiseInterface
+    public function executeStatement(array $params = []): PromiseInterface
     {
         if ($this->isClosed) {
-            throw new \RuntimeException("Cannot execute a closed statement.");
+            throw new \RuntimeException('Cannot execute a closed statement.');
         }
 
         if (\count($params) !== $this->numParams) {
@@ -79,6 +79,7 @@ class PreparedStatement
         foreach ($params as $index => $value) {
             $normalized[$index] = \is_bool($value) ? ($value ? 1 : 0) : $value;
         }
+
         return $normalized;
     }
 

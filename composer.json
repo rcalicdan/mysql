@@ -14,7 +14,9 @@
         "hiblaphp/event-loop":"dev-main",
         "hiblaphp/promise":"dev-main",
         "hiblaphp/stream":"dev-main",
-        "hiblaphp/socket":"dev-main"
+        "hiblaphp/socket":"dev-main",
+        "hiblaphp/async":"dev-main",
+        "hiblaphp/cancellation":"dev-main"
     },
     "require-dev": {
        "pestphp/pest": "^4.0",
