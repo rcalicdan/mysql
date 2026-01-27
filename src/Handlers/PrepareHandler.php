@@ -31,7 +31,8 @@ final class PrepareHandler
         private readonly MysqlConnection $connection,
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     public function start(string $sql, Promise $promise): void
     {
@@ -57,6 +58,7 @@ final class PrepareHandler
             };
         } catch (\Throwable $e) {
             $this->currentPromise?->reject($e);
+
             return true;
         }
     }
@@ -68,9 +70,10 @@ final class PrepareHandler
         if ($firstByte === PacketType::ERR) {
             $code = $reader->readFixedInteger(2);
             $reader->readFixedString(1);
-            $reader->readFixedString(5); 
+            $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
             $this->currentPromise?->reject(new \RuntimeException("Prepare Error [$code]: $msg"));
+
             return true;
         }
 
@@ -83,18 +86,21 @@ final class PrepareHandler
 
             if ($this->numParams > 0) {
                 $this->state = PrepareState::DRAIN_PARAMS;
+
                 return false;
             }
             if ($this->numColumns > 0) {
                 $this->state = PrepareState::DRAIN_COLUMNS;
+
                 return false;
             }
 
             $this->finish();
+
             return true;
         }
 
-        throw new \RuntimeException("Unexpected packet in Prepare Header");
+        throw new \RuntimeException('Unexpected packet in Prepare Header');
     }
 
     private function drainDefinitions(PayloadReader $reader, int $length, string $type): bool
@@ -102,13 +108,17 @@ final class PrepareHandler
         $firstByte = $reader->readFixedInteger(1);
 
         if ($firstByte === 0xFE && $length < 9) {
-            if ($length > 1) $reader->readFixedString($length - 1);
+            if ($length > 1) {
+                $reader->readFixedString($length - 1);
+            }
 
             if ($type === 'params' && $this->numColumns > 0) {
                 $this->state = PrepareState::DRAIN_COLUMNS;
+
                 return false;
             }
             $this->finish();
+
             return true;
         }
 
@@ -142,8 +152,11 @@ final class PrepareHandler
             $decimals
         );
 
-        if ($type === 'columns') $this->columnDefinitions[] = $def;
-        else $this->paramDefinitions[] = $def;
+        if ($type === 'columns') {
+            $this->columnDefinitions[] = $def;
+        } else {
+            $this->paramDefinitions[] = $def;
+        }
 
         return false;
     }

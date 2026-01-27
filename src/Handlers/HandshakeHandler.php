@@ -21,15 +21,15 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
 /**
  * Handles MySQL handshake protocol including SSL/TLS upgrade.
- * 
+ *
  * MySQL uses STARTTLS protocol which requires upgrading an existing
  * plain-text connection to encrypted during the handshake phase.
  * This is different from most protocols which use TLS from connection start.
- * 
+ *
  * Requirements:
  * - Socket must support enableEncryption(array $sslOptions): PromiseInterface
  *   for mid-connection SSL/TLS upgrade (MySQL's STARTTLS protocol)
- * 
+ *
  * Note: This is a MySQL-specific requirement. Most protocols don't need
  * mid-connection encryption upgrade and should use tls:// scheme instead.
  */
@@ -118,7 +118,7 @@ final class HandshakeHandler
     private function configureSslAndEnable(int $clientCaps): void
     {
         // Check if socket supports encryption upgrade (MySQL STARTTLS requirement)
-        if (!method_exists($this->socket, 'enableEncryption')) {
+        if (! method_exists($this->socket, 'enableEncryption')) {
             $this->promise->reject(new \RuntimeException(
                 'Socket does not support SSL/TLS upgrade. ' .
                     'MySQL requires STARTTLS capability for encrypted connections.'
@@ -130,7 +130,7 @@ final class HandshakeHandler
         $sslOptions = [
             'verify_peer' => $this->params->sslVerify,
             'verify_peer_name' => $this->params->sslVerify,
-            'allow_self_signed' => !$this->params->sslVerify,
+            'allow_self_signed' => ! $this->params->sslVerify,
             'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
         ];
 

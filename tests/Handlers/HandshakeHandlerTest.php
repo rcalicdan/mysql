@@ -25,7 +25,7 @@ describe('HandshakeHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $params = createConnectionParams();
         $handler = new HandshakeHandler($socket, $params);
-        
+
         $packetReader = (new DefaultPacketReaderFactory())->createWithDefaultSettings();
 
         $result = $handler->start($packetReader);
@@ -40,7 +40,7 @@ describe('HandshakeHandler', function () {
         $socket->shouldReceive('write')->once();
 
         $handler = new HandshakeHandler($socket, $params);
-        
+
         $handshakePacket = buildMySQLHandshakeV10Packet(supportsSSL: true);
         $packetReader = (new DefaultPacketReaderFactory())->createWithDefaultSettings();
         $packetReader->append($handshakePacket);
@@ -58,7 +58,8 @@ describe('HandshakeHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('SSL/TLS upgrade');
+            ->and($errorMessage)->toContain('SSL/TLS upgrade')
+        ;
     });
 
     it('writes SSL request packet when SSL is enabled', function () {
@@ -68,12 +69,14 @@ describe('HandshakeHandler', function () {
 
         $socket->shouldReceive('write')->twice()->andReturnUsing(function ($packet) {
             expect(strlen($packet))->toBeGreaterThan(0);
+
             return true;
         });
 
         $socket->shouldReceive('enableEncryption')
             ->once()
-            ->andReturn(Promise::resolved());
+            ->andReturn(Promise::resolved())
+        ;
 
         $handler = new HandshakeHandler($socket, $params);
 
@@ -169,7 +172,8 @@ describe('HandshakeHandler', function () {
 
         expect($rejected)->toBeTrue()
             ->and($errorMessage)->toContain('MySQL Handshake Error')
-            ->and($errorMessage)->toContain('1045');
+            ->and($errorMessage)->toContain('1045')
+        ;
     });
 
     it('handles auth switch request', function () {
@@ -209,7 +213,7 @@ describe('HandshakeHandler', function () {
         $handler->start($packetReader);
 
         $payloadReader = Mockery::mock(PayloadReader::class);
-    
+
         $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x01, 0x03);
 
         $handler->processPacket($payloadReader, 2, 2);
@@ -219,7 +223,7 @@ describe('HandshakeHandler', function () {
 
     it('handles full auth required over SSL', function () {
         $params = createConnectionParams(ssl: true);
-        
+
         $socket = Mockery::mock(SslCapableConnection::class);
 
         $socket->shouldReceive('write')->times(3);
@@ -236,7 +240,7 @@ describe('HandshakeHandler', function () {
         Loop::run();
 
         $payloadReader = Mockery::mock(PayloadReader::class);
-    
+
         $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x01, 0x04);
 
         $handler->processPacket($payloadReader, 2, 2);

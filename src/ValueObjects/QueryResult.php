@@ -6,7 +6,7 @@ namespace Hibla\MysqlClient\ValueObjects;
 
 /**
  * Represents the result of a SELECT query that returns rows.
- * 
+ *
  * This object is optimized for read operations and provides
  * convenient methods for iterating over result sets.
  */
@@ -49,13 +49,13 @@ class QueryResult implements \IteratorAggregate, \Countable
 
     /**
      * Fetches a single column from all rows.
-     * 
+     *
      * @param string|int $column Column name or index
      * @return array
      */
     public function fetchColumn(string|int $column = 0): array
     {
-        return array_map(fn($row) => $row[$column] ?? null, $this->rows);
+        return array_map(fn ($row) => $row[$column] ?? null, $this->rows);
     }
 
     /**

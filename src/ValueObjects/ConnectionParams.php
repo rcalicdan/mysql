@@ -58,13 +58,13 @@ final readonly class ConnectionParams
      */
     public static function fromUri(string $uri): self
     {
-        if (!str_contains($uri, '://')) {
+        if (! str_contains($uri, '://')) {
             $uri = 'mysql://' . $uri;
         }
 
         $parts = parse_url($uri);
 
-        if ($parts === false || !isset($parts['host'])) {
+        if ($parts === false || ! isset($parts['host'])) {
             throw new \InvalidArgumentException('Invalid MySQL URI: ' . $uri);
         }
 
@@ -117,7 +117,7 @@ final readonly class ConnectionParams
     public function toSafeUri(): string
     {
         $uri = 'mysql://';
-        
+
         if ($this->username !== 'root') {
             $uri .= rawurlencode($this->username);
             if ($this->password !== '') {
@@ -125,17 +125,17 @@ final readonly class ConnectionParams
             }
             $uri .= '@';
         }
-        
+
         $uri .= $this->host;
-        
+
         if ($this->port !== 3306) {
             $uri .= ':' . $this->port;
         }
-        
+
         if ($this->database !== '') {
             $uri .= '/' . rawurlencode($this->database);
         }
-        
+
         return $uri;
     }
 }

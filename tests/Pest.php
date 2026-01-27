@@ -11,7 +11,8 @@ uses()
         Loop::reset();
         Mockery::close();
     })
-    ->in(__DIR__);
+    ->in(__DIR__)
+;
 
 function createConnectionParams(bool $ssl = false): ConnectionParams
 {
@@ -31,7 +32,7 @@ function buildMySQLHandshakeV10Packet(bool $supportsSSL = false): string
     $payload .= chr(10);
     $payload .= "8.0.32\0";
     $payload .= pack('V', 123);
-    $payload .= "12345678";
+    $payload .= '12345678';
     $payload .= "\0";
 
     $capabilities = 0xF7DF;

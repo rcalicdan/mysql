@@ -15,17 +15,18 @@ final class PingHandler
 {
     private ?Promise $currentPromise = null;
     private int $sequenceId = 0;
-    
+
     public function __construct(
         private readonly SocketConnection $socket
-    ) {}
+    ) {
+    }
 
     public function start(Promise $promise): void
     {
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
 
-        $payload = \chr(0x0E); 
+        $payload = \chr(0x0E);
         $this->writePacket($payload);
     }
 
@@ -37,19 +38,22 @@ final class PingHandler
 
             if ($frame instanceof OkPacket) {
                 $this->currentPromise?->resolve(true);
-                return true; 
+
+                return true;
             }
 
             if ($frame instanceof ErrPacket) {
                 $this->currentPromise?->reject(
                     new \RuntimeException("Ping failed: {$frame->errorMessage}")
                 );
-                return true; 
+
+                return true;
             }
 
-            throw new \RuntimeException("Unexpected packet type in ping response");
+            throw new \RuntimeException('Unexpected packet type in ping response');
         } catch (\Throwable $e) {
             $this->currentPromise?->reject($e);
+
             return true;
         }
     }

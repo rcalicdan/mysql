@@ -16,8 +16,8 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
-use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinitionParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\RowOrEofParser;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinitionParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\TextRow;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
@@ -71,6 +71,7 @@ final class QueryHandler
             throw $e;
         } catch (\Throwable $e) {
             $this->currentPromise?->reject($e);
+
             // Drain to avoid loop
             try {
                 $reader->readRestOfPacketString();
@@ -88,6 +89,7 @@ final class QueryHandler
             $this->currentPromise?->reject(
                 new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}")
             );
+
             return;
         }
 
@@ -99,6 +101,7 @@ final class QueryHandler
                 warningCount: $frame->warningCount ?? 0
             );
             $this->currentPromise?->resolve($result);
+
             return;
         }
 
@@ -106,10 +109,11 @@ final class QueryHandler
             // For query() operations
             $this->columnCount = $frame->columnCount;
             $this->state = ParserState::COLUMNS;
+
             return;
         }
 
-        throw new \RuntimeException("Unexpected packet type in header state");
+        throw new \RuntimeException('Unexpected packet type in header state');
     }
 
     private function handleColumn(PayloadReader $reader, int $length, int $seq): void
@@ -122,6 +126,7 @@ final class QueryHandler
             }
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
+
             return;
         }
 
@@ -152,16 +157,19 @@ final class QueryHandler
 
         if ($firstByte === 0xFC) {
             $length = $reader->readFixedInteger(2);
+
             return $reader->readFixedString((int)$length);
         }
 
         if ($firstByte === 0xFD) {
             $length = $reader->readFixedInteger(3);
+
             return $reader->readFixedString((int)$length);
         }
 
         if ($firstByte === 0xFE) {
             $length = $reader->readFixedInteger(8);
+
             return $reader->readFixedString((int)$length);
         }
 
@@ -173,7 +181,7 @@ final class QueryHandler
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
     {
         if ($this->rowParser === null) {
-            throw new \RuntimeException("Row parser not initialized");
+            throw new \RuntimeException('Row parser not initialized');
         }
 
         $frame = $this->rowParser->parse($reader, $length, $seq);
@@ -182,6 +190,7 @@ final class QueryHandler
             // Return QueryResult for SELECT queries
             $result = new QueryResult($this->rows);
             $this->currentPromise?->resolve($result);
+
             return;
         }
 

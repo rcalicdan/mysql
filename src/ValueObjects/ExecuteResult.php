@@ -6,7 +6,7 @@ namespace Hibla\MysqlClient\ValueObjects;
 
 /**
  * Represents the result of a write operation (INSERT, UPDATE, DELETE, etc.).
- * 
+ *
  * This object focuses on metadata about the operation rather than row data.
  */
 class ExecuteResult
@@ -20,7 +20,8 @@ class ExecuteResult
         private readonly int $affectedRows,
         private readonly int $lastInsertId = 0,
         private readonly int $warningCount = 0
-    ) {}
+    ) {
+    }
 
     /**
      * Gets the number of rows affected by the operation.

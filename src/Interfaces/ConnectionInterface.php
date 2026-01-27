@@ -30,7 +30,7 @@ interface ConnectionInterface
 
     /**
      * Execute a SQL statement.
-     * 
+     *
      * @param string $sql The SQL command to execute
      * @return PromiseInterface<ExecuteResult>
      */

@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\MysqlClient\Interfaces;
 
-use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
+use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 

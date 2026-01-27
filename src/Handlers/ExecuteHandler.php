@@ -30,7 +30,8 @@ final class ExecuteHandler
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     public function start(int $stmtId, array $params, array $columnDefinitions, Promise $promise): void
     {
@@ -58,7 +59,12 @@ final class ExecuteHandler
             throw $e;
         } catch (\Throwable $e) {
             $this->currentPromise?->reject($e);
-            try { $reader->readRestOfPacketString(); } catch (\Throwable $t) { }
+
+            try {
+                $reader->readRestOfPacketString();
+            } catch (\Throwable $t) {
+            }
+
             return true;
         }
     }
@@ -70,21 +76,24 @@ final class ExecuteHandler
 
         if ($frame instanceof ErrPacket) {
             $this->currentPromise?->reject(new \RuntimeException("Execute Error: {$frame->errorMessage}"));
+
             return true;
         }
 
         if ($frame instanceof OkPacket) {
             $result = new ExecuteResult($frame->affectedRows, $frame->lastInsertId, $frame->warnings);
             $this->currentPromise?->resolve($result);
+
             return true;
         }
 
         if ($frame instanceof ResultSetHeader) {
             $this->state = ExecuteState::CHECK_DATA;
+
             return false;
         }
 
-        throw new \RuntimeException("Unexpected packet in Execute Header");
+        throw new \RuntimeException('Unexpected packet in Execute Header');
     }
 
     private function handleDataPacket(PayloadReader $reader, int $length): bool
@@ -93,7 +102,8 @@ final class ExecuteHandler
 
         if ($firstByte === PacketType::OK) {
             $this->state = ExecuteState::ROWS;
-            return $this->parseRow($reader); 
+
+            return $this->parseRow($reader);
         }
 
         if ($firstByte === PacketType::EOF && $length < PacketType::EOF_MAX_LENGTH) {
@@ -101,12 +111,13 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
             $this->state = ExecuteState::ROWS;
+
             return false;
         }
 
         $reader->readFixedString((int)$firstByte);
-        $reader->readRestOfPacketString(); 
-        
+        $reader->readRestOfPacketString();
+
         return false;
     }
 
@@ -118,14 +129,15 @@ final class ExecuteHandler
             if ($length > 1) {
                 $reader->readFixedString($length - 1);
             }
-            
+
             $result = new QueryResult($this->rows);
             $this->currentPromise?->resolve($result);
+
             return true;
         }
 
         if ($firstByte !== PacketType::OK) {
-            throw new \RuntimeException("Invalid Binary Row");
+            throw new \RuntimeException('Invalid Binary Row');
         }
 
         return $this->parseRow($reader);
@@ -141,6 +153,7 @@ final class ExecuteHandler
         foreach ($this->columnDefinitions as $i => $column) {
             if ($this->isColumnNull($nullBitmap, $i)) {
                 $values[] = null;
+
                 continue;
             }
             $values[] = $this->readBinaryValue($reader, $column->type);
@@ -161,30 +174,30 @@ final class ExecuteHandler
         $bitPos = $index + 2;
         $byteIdx = (int) floor($bitPos / 8);
         $bit = (1 << ($bitPos % 8));
-        
-        if (!isset($nullBitmap[$byteIdx])) {
+
+        if (! isset($nullBitmap[$byteIdx])) {
             return false;
         }
-        
+
         return (\ord($nullBitmap[$byteIdx]) & $bit) !== 0;
     }
 
     /**
      * Read a binary-encoded value based on MySQL type.
-     * 
+     *
      * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html#sect_protocol_binary_resultset_row_value
      */
     private function readBinaryValue(PayloadReader $reader, int $type): mixed
     {
         return match ($type) {
-            MysqlType::TINY => $reader->readFixedInteger(1),       
+            MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
-            MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4), 
-            MysqlType::LONGLONG => $reader->readFixedInteger(8),    
+            MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4),
+            MysqlType::LONGLONG => $reader->readFixedInteger(8),
             MysqlType::FLOAT => unpack('f', $reader->readFixedString(4))[1],
             MysqlType::DOUBLE => unpack('d', $reader->readFixedString(8))[1],
-            MysqlType::DATE, 
-            MysqlType::DATETIME, 
+            MysqlType::DATE,
+            MysqlType::DATETIME,
             MysqlType::TIMESTAMP => $this->readBinaryDateTime($reader, $type),
             MysqlType::TIME => $this->readBinaryTime($reader),
             default => $reader->readLengthEncodedStringOrNull()
@@ -193,7 +206,7 @@ final class ExecuteHandler
 
     /**
      * Read binary-encoded DATE, DATETIME, or TIMESTAMP.
-     * 
+     *
      * Binary format according to MySQL protocol specification:
      * - 1 byte: length indicator
      *   - 0: All fields are zero (zero date: '0000-00-00' or '0000-00-00 00:00:00')
@@ -203,51 +216,51 @@ final class ExecuteHandler
      * - If length >= 4: 2 bytes year, 1 byte month, 1 byte day
      * - If length >= 7: 1 byte hour, 1 byte minute, 1 byte second
      * - If length = 11: 4 bytes microseconds (little-endian)
-     * 
+     *
      * @param PayloadReader $reader The payload reader
      * @param int $type The MySQL type (DATE, DATETIME, or TIMESTAMP)
      * @return string|null The formatted date/time string or null
-     * 
+     *
      * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
      */
     private function readBinaryDateTime(PayloadReader $reader, int $type): ?string
     {
         $length = $reader->readFixedInteger(1);
- 
+
         if ($length === 0) {
-            return $type === MysqlType::DATE 
-                ? '0000-00-00' 
+            return $type === MysqlType::DATE
+                ? '0000-00-00'
                 : '0000-00-00 00:00:00';
         }
-        
+
         $year = $reader->readFixedInteger(2);
         $month = $reader->readFixedInteger(1);
         $day = $reader->readFixedInteger(1);
-        
+
         $date = \sprintf('%04d-%02d-%02d', $year, $month, $day);
-        
+
         if ($type === MysqlType::DATE) {
             return $date;
         }
-        
+
         if ($length >= 7) {
             $hour = $reader->readFixedInteger(1);
             $min = $reader->readFixedInteger(1);
             $sec = $reader->readFixedInteger(1);
             $date .= \sprintf(' %02d:%02d:%02d', $hour, $min, $sec);
-            
+
             if ($length === 11) {
                 $microseconds = $reader->readFixedInteger(4);
                 $date .= \sprintf('.%06d', $microseconds);
             }
         }
-        
+
         return $date;
     }
 
     /**
      * Read binary-encoded TIME value.
-     * 
+     *
      * Binary format according to MySQL protocol specification:
      * - 1 byte: length indicator (0, 8, or 12)
      * - If length >= 8:
@@ -258,40 +271,41 @@ final class ExecuteHandler
      *   - 1 byte: second
      * - If length = 12:
      *   - 4 bytes: microseconds
-     * 
+     *
      * Note: TIME can represent up to ±838:59:59 (not just 0-23 hours)
      * This is because TIME can store elapsed time or intervals, not just time-of-day.
-     * 
+     *
      * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
      */
     private function readBinaryTime(PayloadReader $reader): ?string
     {
         $length = $reader->readFixedInteger(1);
-    
+
         if ($length === 0) {
             return '00:00:00';
         }
-        
+
         $isNegative = $reader->readFixedInteger(1);
         $days = $reader->readFixedInteger(4);
         $hour = $reader->readFixedInteger(1);
         $min = $reader->readFixedInteger(1);
         $sec = $reader->readFixedInteger(1);
-        
+
         $totalHours = $days * 24 + $hour;
-        
-        $time = \sprintf('%s%02d:%02d:%02d', 
-            $isNegative ? '-' : '', 
-            $totalHours, 
-            $min, 
+
+        $time = \sprintf(
+            '%s%02d:%02d:%02d',
+            $isNegative ? '-' : '',
+            $totalHours,
+            $min,
             $sec
         );
-        
+
         if ($length === 12) {
             $microseconds = $reader->readFixedInteger(4);
             $time .= \sprintf('.%06d', $microseconds);
         }
-        
+
         return $time;
     }
 

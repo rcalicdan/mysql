@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\MysqlClient\Interfaces;
 
-use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
+use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 
 /**
@@ -13,14 +13,14 @@ use Hibla\Promise\Interfaces\PromiseInterface;
  *
  * Prepared statements provide a way to execute the same SQL query
  * multiple times with different parameters efficiently and securely.
- * 
+ *
  * They prevent SQL injection and improve performance for repeated queries.
  */
 interface PreparedStatementInterface
 {
     /**
      * Execute the prepared statement with the given parameters.
-     * 
+     *
      * The return type depends on the statement type:
      * - SELECT queries return QueryResult with rows
      * - INSERT/UPDATE/DELETE return ExecuteResult with metadata
@@ -58,7 +58,7 @@ interface PreparedStatementInterface
      * @return int
      */
     public function getColumnCount(): int;
-    
+
     /**
      * Check if this is a SELECT statement that returns rows.
      *

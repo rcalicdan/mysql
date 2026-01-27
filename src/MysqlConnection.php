@@ -13,13 +13,13 @@ use Hibla\MysqlClient\Handlers\QueryHandler;
 use Hibla\MysqlClient\Interfaces\ConnectionInterface;
 use Hibla\MysqlClient\ValueObjects\CommandRequest;
 use Hibla\MysqlClient\ValueObjects\ConnectionParams;
-use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\MysqlClient\ValueObjects\ExecuteResult;
+use Hibla\MysqlClient\ValueObjects\QueryResult;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
-use Hibla\Socket\Interfaces\ConnectorInterface;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Hibla\Socket\Interfaces\ConnectorInterface;
 use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
@@ -51,6 +51,8 @@ class MysqlConnection implements ConnectionInterface
             \is_string($config) => ConnectionParams::fromUri($config),
         };
         $this->commandQueue = new \SplQueue();
+        
+        register_shutdown_function([$this, 'close']);
     }
 
     /**
@@ -61,6 +63,7 @@ class MysqlConnection implements ConnectionInterface
         ?ConnectorInterface $connector = null
     ): PromiseInterface {
         $connection = new self($config, $connector);
+
         return $connection->connect();
     }
 
@@ -120,19 +123,45 @@ class MysqlConnection implements ConnectionInterface
         return $this->enqueueCommand(CommandRequest::TYPE_PING);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     public function close(): void
     {
-        if ($this->state === ConnectionState::CLOSED) return;
+        if ($this->state === ConnectionState::CLOSED) {
+            return;
+        }
 
         $this->isUserClosing = true;
         $this->state = ConnectionState::CLOSED;
 
         if ($this->socket) {
-            $this->socket->close();
+            try {
+                $this->socket->close();
+            } catch (\Throwable $e) {
+                // Ignore errors during close, as we are shutting down anyway
+            }
+
             $this->socket = null;
+        }
+
+        $this->packetReader = null;
+        $this->handshakeHandler = null;
+        $this->queryHandler = null;
+        $this->prepareHandler = null;
+        $this->executeHandler = null;
+        $this->pingHandler = null;
+
+        if ($this->connectPromise) {
+            $this->connectPromise->reject(new \RuntimeException('Connection closed by user'));
+            $this->connectPromise = null;
+        }
+
+        if ($this->currentCommand) {
+            $this->currentCommand->promise->reject(new \RuntimeException('Connection closed by user'));
+            $this->currentCommand = null;
+        }
+
+        while (!$this->commandQueue->isEmpty()) {
+            $cmd = $this->commandQueue->dequeue();
+            $cmd->promise->reject(new \RuntimeException('Connection closed by user'));
         }
     }
 
@@ -207,6 +236,7 @@ class MysqlConnection implements ConnectionInterface
         $promise = new Promise();
         $this->commandQueue->enqueue(new CommandRequest($type, $promise, $sql, $params, $stmtId, $context));
         $this->processNextCommand();
+
         return $promise;
     }
 
@@ -214,13 +244,13 @@ class MysqlConnection implements ConnectionInterface
     {
         if ($this->state !== ConnectionState::CONNECTING) {
             $socket->close();
+
             return;
         }
 
         $this->socket = $socket;
         $this->packetReader = (new DefaultPacketReaderFactory())->createWithDefaultSettings();
 
-        // Initialize all Handlers
         $commandBuilder = new CommandBuilder();
         $this->handshakeHandler = new HandshakeHandler($socket, $this->params);
         $this->queryHandler = new QueryHandler($socket, $commandBuilder);
@@ -261,16 +291,19 @@ class MysqlConnection implements ConnectionInterface
             case CommandRequest::TYPE_QUERY:
                 $this->state = ConnectionState::QUERYING;
                 $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_PING:
                 $this->state = ConnectionState::PINGING;
                 $this->pingHandler->start($this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_PREPARE:
                 $this->state = ConnectionState::PREPARING;
                 $this->prepareHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_EXECUTE:
@@ -283,6 +316,7 @@ class MysqlConnection implements ConnectionInterface
                     $stmt->columnDefinitions,
                     $this->currentCommand->promise
                 );
+
                 break;
 
             case CommandRequest::TYPE_CLOSE_STMT:
@@ -290,12 +324,13 @@ class MysqlConnection implements ConnectionInterface
                 $this->currentCommand->promise->resolve(null);
                 $this->currentCommand = null;
                 $this->processNextCommand();
+
                 return;
         }
 
         $this->currentCommand->promise->then(
-            fn() => $this->finishCommand(),
-            fn() => $this->finishCommand()
+            $this->finishCommand(...),
+            $this->finishCommand(...)
         );
     }
 
@@ -308,14 +343,16 @@ class MysqlConnection implements ConnectionInterface
 
     private function sendClosePacket(int $stmtId): void
     {
-        $payload = chr(0x19) . pack('V', $stmtId);
+        $payload = \chr(0x19) . pack('V', $stmtId);
         $header = substr(pack('V', 5), 0, 3) . chr(0);
         $this->socket->write($header . $payload);
     }
 
     private function handleData(string $chunk): void
     {
-        if ($this->state === ConnectionState::CLOSED) return;
+        if ($this->state === ConnectionState::CLOSED) {
+            return;
+        }
 
         try {
             $this->packetReader->append($chunk);
@@ -323,21 +360,16 @@ class MysqlConnection implements ConnectionInterface
             while ($this->packetReader->hasPacket()) {
                 $success = $this->packetReader->readPayload(function ($payloadReader, $length, $seq) {
                     match ($this->state) {
-                        ConnectionState::CONNECTING =>
-                        $this->handshakeHandler?->processPacket($payloadReader, $length, $seq),
-                        ConnectionState::QUERYING =>
-                        $this->queryHandler?->processPacket($payloadReader, $length, $seq),
-                        ConnectionState::PINGING =>
-                        $this->pingHandler?->processPacket($payloadReader, $length, $seq),
-                        ConnectionState::PREPARING =>
-                        $this->prepareHandler?->processPacket($payloadReader, $length, $seq),
-                        ConnectionState::EXECUTING =>
-                        $this->executeHandler?->processPacket($payloadReader, $length, $seq),
+                        ConnectionState::CONNECTING => $this->handshakeHandler?->processPacket($payloadReader, $length, $seq),
+                        ConnectionState::QUERYING => $this->queryHandler?->processPacket($payloadReader, $length, $seq),
+                        ConnectionState::PINGING => $this->pingHandler?->processPacket($payloadReader, $length, $seq),
+                        ConnectionState::PREPARING => $this->prepareHandler?->processPacket($payloadReader, $length, $seq),
+                        ConnectionState::EXECUTING => $this->executeHandler?->processPacket($payloadReader, $length, $seq),
                         default => null
                     };
                 });
 
-                if (!$success) {
+                if (! $success) {
                     break;
                 }
             }
@@ -350,10 +382,12 @@ class MysqlConnection implements ConnectionInterface
     {
         $this->handleError($e);
     }
+
     private function handleHandshakeError(\Throwable $e): void
     {
         $this->handleError($e);
     }
+
     private function handleSocketError(\Throwable $e): void
     {
         $this->handleError($e);
@@ -361,7 +395,9 @@ class MysqlConnection implements ConnectionInterface
 
     private function handleError(\Throwable $e): void
     {
-        if ($this->isClosingError) return;
+        if ($this->isClosingError) {
+            return;
+        }
 
         $this->isClosingError = true;
         $this->state = ConnectionState::CLOSED;
@@ -373,9 +409,9 @@ class MysqlConnection implements ConnectionInterface
         if ($this->currentCommand) {
             $this->currentCommand->promise->reject($e);
         }
-        while (!$this->commandQueue->isEmpty()) {
+        while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(new \RuntimeException("Connection closed before execution", 0, $e));
+            $cmd->promise->reject(new \RuntimeException('Connection closed before execution', 0, $e));
         }
         if ($this->socket) {
             $this->socket->close();
@@ -386,11 +422,13 @@ class MysqlConnection implements ConnectionInterface
 
     private function handleSocketClose(): void
     {
-        if ($this->isClosingError || $this->isUserClosing) return;
+        if ($this->isClosingError || $this->isUserClosing) {
+            return;
+        }
 
         $this->state = ConnectionState::CLOSED;
 
-        $exception = new \RuntimeException("Connection closed unexpectedly");
+        $exception = new \RuntimeException('Connection closed unexpectedly');
 
         if ($this->connectPromise) {
             $this->connectPromise->reject($exception);
@@ -400,5 +438,10 @@ class MysqlConnection implements ConnectionInterface
         if ($this->currentCommand) {
             $this->currentCommand->promise->reject($exception);
         }
+    }
+
+    public function __destruct()
+    {
+        $this->close();
     }
 }
