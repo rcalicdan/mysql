@@ -303,4 +303,10 @@ class PoolManager
 
         return $promise;
     }
+
+    public function __destruct()
+    {
+        echo "pool manager destructor called\n";
+        $this->close();
+    }
 }

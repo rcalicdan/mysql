@@ -16,7 +16,8 @@
         "hiblaphp/stream":"dev-main",
         "hiblaphp/socket":"dev-main",
         "hiblaphp/async":"dev-main",
-        "hiblaphp/cancellation":"dev-main"
+        "hiblaphp/cancellation":"dev-main",
+        "rcalicdan/defer": "^1.0"
     },
     "require-dev": {
        "pestphp/pest": "^4.0",
