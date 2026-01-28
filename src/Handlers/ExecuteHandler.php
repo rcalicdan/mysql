@@ -7,6 +7,8 @@ namespace Hibla\MysqlClient\Handlers;
 use Hibla\MysqlClient\Enums\ExecuteState;
 use Hibla\MysqlClient\Internals\ExecuteResult;
 use Hibla\MysqlClient\Internals\QueryResult;
+use Hibla\MysqlClient\ValueObjects\StreamContext;
+use Hibla\MysqlClient\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Rcalicdan\MySQLBinaryProtocol\Constants\MysqlType;
@@ -19,6 +21,16 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
+/**
+ * Handles binary protocol prepared statement execution (COM_STMT_EXECUTE).
+ *
+ * Supports both buffered and streaming modes:
+ * - Buffered: All rows loaded into QueryResult
+ * - Streaming: Rows delivered via callback with StreamStats result
+ *
+ * @internal
+ * @package Hibla\MysqlClient\Handlers
+ */
 final class ExecuteHandler
 {
     private ExecuteState $state = ExecuteState::HEADER;
@@ -26,6 +38,9 @@ final class ExecuteHandler
     private ?Promise $currentPromise = null;
     private array $rows = [];
     private array $columnDefinitions = [];
+    private ?StreamContext $streamContext = null;
+    private int $streamedRowCount = 0;
+    private float $streamStartTime = 0;
 
     public function __construct(
         private readonly SocketConnection $socket,
@@ -33,13 +48,31 @@ final class ExecuteHandler
     ) {
     }
 
-    public function start(int $stmtId, array $params, array $columnDefinitions, Promise $promise): void
-    {
+    /**
+     * Start a prepared statement execution.
+     *
+     * @param int $stmtId Server-side statement ID
+     * @param array $params Parameters to bind
+     * @param array $columnDefinitions Column metadata
+     * @param Promise $promise Promise to resolve with result
+     * @param StreamContext|null $streamContext Optional streaming context
+     */
+    public function start(
+        int $stmtId,
+        array $params,
+        array $columnDefinitions,
+        Promise $promise,
+        ?StreamContext $streamContext = null
+    ): void {
         $this->state = ExecuteState::HEADER;
         $this->rows = [];
         $this->columnDefinitions = $columnDefinitions;
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
+
+        $this->streamContext = $streamContext;
+        $this->streamedRowCount = 0;
+        $this->streamStartTime = microtime(true);
 
         $packet = $this->commandBuilder->buildStmtExecute($stmtId, $params);
         $this->writePacket($packet);
@@ -58,6 +91,15 @@ final class ExecuteHandler
         } catch (IncompleteBufferException $e) {
             throw $e;
         } catch (\Throwable $e) {
+            // Notify stream error callback if streaming
+            if ($this->streamContext !== null && $this->streamContext->onError !== null) {
+                try {
+                    ($this->streamContext->onError)($e);
+                } catch (\Throwable $callbackError) {
+                    // Ignore callback errors
+                }
+            }
+
             $this->currentPromise?->reject($e);
 
             try {
@@ -130,8 +172,30 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
 
-            $result = new QueryResult($this->rows);
-            $this->currentPromise?->resolve($result);
+            // Query complete - return appropriate result
+            if ($this->streamContext !== null) {
+                // Streaming mode: return statistics
+                $stats = new StreamStats(
+                    rowCount: $this->streamedRowCount,
+                    columnCount: \count($this->columnDefinitions),
+                    duration: microtime(true) - $this->streamStartTime
+                );
+
+                // Notify completion callback
+                if ($this->streamContext->onComplete !== null) {
+                    try {
+                        ($this->streamContext->onComplete)($stats);
+                    } catch (\Throwable $e) {
+                        // Ignore callback errors
+                    }
+                }
+
+                $this->currentPromise?->resolve($stats);
+            } else {
+                // Buffered mode: return QueryResult
+                $result = new QueryResult($this->rows);
+                $this->currentPromise?->resolve($result);
+            }
 
             return true;
         }
@@ -164,7 +228,23 @@ final class ExecuteHandler
             $colName = $this->columnDefinitions[$index]->name;
             $assocRow[$colName] = $val;
         }
-        $this->rows[] = $assocRow;
+
+        if ($this->streamContext !== null) {
+            // Streaming mode: deliver row via callback
+            try {
+                ($this->streamContext->onRow)($assocRow);
+                $this->streamedRowCount++;
+            } catch (\Throwable $e) {
+                // Notify error callback
+                if ($this->streamContext->onError !== null) {
+                    ($this->streamContext->onError)($e);
+                }
+                throw $e;
+            }
+        } else {
+            // Buffered mode: collect row
+            $this->rows[] = $assocRow;
+        }
 
         return false;
     }

@@ -6,21 +6,37 @@ namespace Hibla\MysqlClient\ValueObjects;
 
 use Hibla\Promise\Promise;
 
-final readonly class CommandRequest
+/**
+ * Represents a queued command to be executed on the MySQL connection.
+ *
+ * @internal
+ * @package Hibla\MysqlClient\ValueObjects
+ */
+final class CommandRequest
 {
-    public const TYPE_QUERY = 'QUERY';
-    public const TYPE_PING = 'PING';
-    public const TYPE_PREPARE = 'PREPARE';
-    public const TYPE_EXECUTE = 'EXECUTE';
-    public const TYPE_CLOSE_STMT = 'CLOSE_STMT';
+    public const string TYPE_QUERY = 'query';
+    public const string TYPE_EXECUTE = 'execute';
+    public const string TYPE_PING = 'ping';
+    public const string TYPE_PREPARE = 'prepare';
+    public const string TYPE_CLOSE_STMT = 'close_stmt';
+    public const string TYPE_STREAM_QUERY = 'stream_query';
+    public const string TYPE_EXECUTE_STREAM = 'execute_stream';
 
+    /**
+     * @param string $type The type of command (one of the TYPE_* constants)
+     * @param Promise $promise The promise to resolve/reject when command completes
+     * @param string $sql The SQL query string (for query/prepare/stream commands)
+     * @param array $params Parameters for prepared statement execution
+     * @param int $statementId The statement ID (for execute/close commands)
+     * @param mixed $context Additional context data (e.g., StreamContext for streaming)
+     */
     public function __construct(
-        public string $type,
-        public Promise $promise,
-        public string $sql = '',
-        public array $params = [],
-        public int $statementId = 0,
-        public mixed $context = null // Holds the PreparedStatement object during Execute
+        public readonly string $type,
+        public readonly Promise $promise,
+        public readonly string $sql = '',
+        public readonly array $params = [],
+        public readonly int $statementId = 0,
+        public readonly mixed $context = null,
     ) {
     }
 }

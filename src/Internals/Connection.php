@@ -13,8 +13,9 @@ use Hibla\MysqlClient\Handlers\PrepareHandler;
 use Hibla\MysqlClient\Handlers\QueryHandler;
 use Hibla\MysqlClient\ValueObjects\CommandRequest;
 use Hibla\MysqlClient\ValueObjects\ConnectionParams;
-use Hibla\MysqlClient\Internals\ExecuteResult;
-use Hibla\MysqlClient\Internals\QueryResult;
+use Hibla\MysqlClient\ValueObjects\ExecuteStreamContext;
+use Hibla\MysqlClient\ValueObjects\StreamContext;
+use Hibla\MysqlClient\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
@@ -88,8 +89,8 @@ class Connection
             'tcp' => true,
             'tls' => false,
             'unix' => false,
-            'dns' => true,           
-            'happy_eyeballs' => false, 
+            'dns' => true,
+            'happy_eyeballs' => false,
         ]);
 
         $socketUri = \sprintf('tcp://%s:%d', $this->params->host, $this->params->port);
@@ -103,6 +104,11 @@ class Connection
     }
 
     /**
+     * Execute a SELECT query and return all rows buffered in memory.
+     *
+     * Use this for small to medium result sets. For large result sets
+     * that may exceed available memory, use streamQuery() instead.
+     *
      * @param string $sql The SQL query to execute
      * @return PromiseInterface<QueryResult>
      */
@@ -112,7 +118,7 @@ class Connection
     }
 
     /**
-     * Execute a SQL statement.
+     * Execute a SQL statement (INSERT, UPDATE, DELETE, etc.).
      *
      * @param string $sql The SQL command to execute
      * @return PromiseInterface<ExecuteResult>
@@ -120,6 +126,25 @@ class Connection
     public function execute(string $sql): PromiseInterface
     {
         return $this->query($sql);
+    }
+
+    /**
+     * Stream a SELECT query row-by-row without buffering in memory.
+     * 
+     * @param string $sql The SQL SELECT query to execute
+     * @param callable(array): void $onRow Callback invoked for each row
+     * @param callable(StreamStats): void|null $onComplete Optional callback when streaming completes
+     * @param callable(\Throwable): void|null $onError Optional callback for error handling
+     * @return PromiseInterface<StreamStats> Resolves with streaming statistics
+     */
+    public function streamQuery(
+        string $sql,
+        callable $onRow,
+        ?callable $onComplete = null,
+        ?callable $onError = null
+    ): PromiseInterface {
+        $context = new StreamContext($onRow, $onComplete, $onError);
+        return $this->enqueueCommand(CommandRequest::TYPE_STREAM_QUERY, $sql, context: $context);
     }
 
     /**
@@ -247,6 +272,30 @@ class Connection
     }
 
     /**
+     * @internal Called by PreparedStatement to execute with streaming.
+     * @return PromiseInterface<StreamStats>
+     */
+    /**
+     * @internal Called by PreparedStatement to execute with streaming.
+     * @return PromiseInterface<StreamStats>
+     */
+    public function executeStatementStream(
+        PreparedStatement $stmt,
+        array $params,
+        StreamContext $context
+    ): PromiseInterface {
+        $executeContext = new ExecuteStreamContext($stmt, $context);
+
+        return $this->enqueueCommand(
+            CommandRequest::TYPE_EXECUTE_STREAM,
+            '',
+            $params,
+            $stmt->id,
+            $executeContext
+        );
+    }
+
+    /**
      * @internal Called by PreparedStatement to close itself.
      * @return PromiseInterface<void>
      */
@@ -329,19 +378,23 @@ class Connection
             case CommandRequest::TYPE_QUERY:
                 $this->state = ConnectionState::QUERYING;
                 $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+                break;
 
+            case CommandRequest::TYPE_STREAM_QUERY:
+                $this->state = ConnectionState::QUERYING;
+                /** @var StreamContext $streamContext */
+                $streamContext = $this->currentCommand->context;
+                $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise, $streamContext);
                 break;
 
             case CommandRequest::TYPE_PING:
                 $this->state = ConnectionState::PINGING;
                 $this->pingHandler->start($this->currentCommand->promise);
-
                 break;
 
             case CommandRequest::TYPE_PREPARE:
                 $this->state = ConnectionState::PREPARING;
                 $this->prepareHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
-
                 break;
 
             case CommandRequest::TYPE_EXECUTE:
@@ -354,7 +407,20 @@ class Connection
                     $stmt->columnDefinitions,
                     $this->currentCommand->promise
                 );
+                break;
 
+            case CommandRequest::TYPE_EXECUTE_STREAM:
+                $this->state = ConnectionState::EXECUTING;
+                /** @var ExecuteStreamContext $ctx */
+                $ctx = $this->currentCommand->context;
+
+                $this->executeHandler->start(
+                    $ctx->statement->id,
+                    $this->currentCommand->params,
+                    $ctx->statement->columnDefinitions,
+                    $this->currentCommand->promise,
+                    $ctx->streamContext
+                );
                 break;
 
             case CommandRequest::TYPE_CLOSE_STMT:
@@ -362,7 +428,6 @@ class Connection
                 $this->currentCommand->promise->resolve(null);
                 $this->currentCommand = null;
                 $this->processNextCommand();
-
                 return;
         }
 
