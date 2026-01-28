@@ -17,9 +17,8 @@ use Throwable;
  * Manages a pool of asynchronous MySQL connections.
  *
  * This class provides a robust mechanism for managing a limited number of database
- * connections, preventing resource exhaustion and reducing the latency associated
- * with establishing new connections for every query. It uses promises to handle
- * asynchronous acquisition of connections.
+ * connections, preventing resource exhaustion. It integrates with the Event Loop
+ * to allow automatic script termination when connections are idle.
  */
 class PoolManager
 {
@@ -87,23 +86,20 @@ class PoolManager
     /**
      * Asynchronously acquires a connection from the pool.
      *
-     * This method returns a promise that will be fulfilled with a `MysqlConnection` object.
-     * The logic is as follows:
-     * 1. If an idle connection is available in the pool, it is returned immediately.
-     * 2. If no connection is available but the pool is not at max capacity, a new one is created.
-     * 3. If the pool is at max capacity, the request is enqueued and will be fulfilled later
-     *    when another connection is released.
-     *
      * @return PromiseInterface<MysqlConnection> A promise that resolves with a database connection.
      */
     public function get(): PromiseInterface
     {
         // Check for idle connection
         if (!$this->pool->isEmpty()) {
+            /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
             
             // Verify connection is still alive
             if ($connection->isReady()) {
+                // Resume the connection (re-attach event loop listeners) so it can receive data
+                $connection->resume();
+                
                 $this->lastConnection = $connection;
                 return Promise::resolved($connection);
             }
@@ -121,6 +117,7 @@ class PoolManager
             MysqlConnection::create($this->connectionParams)
                 ->then(
                     function (MysqlConnection $connection) use ($promise) {
+                        // New connections are created in 'active' state (resumed), so we use them directly
                         $this->lastConnection = $connection;
                         $promise->resolve($connection);
                     },
@@ -143,10 +140,6 @@ class PoolManager
 
     /**
      * Releases a connection back to the pool.
-     *
-     * After use, a connection must be released to make it available for other requests.
-     * This method will first check if there are any waiting requests and fulfill one if so.
-     * Otherwise, it returns the connection to the idle pool.
      *
      * @param MysqlConnection $connection The connection to release.
      */
@@ -185,6 +178,7 @@ class PoolManager
             $this->lastConnection = $connection;
             $promise->resolve($connection);
         } else {
+            $connection->pause();
             $this->pool->enqueue($connection);
         }
     }
@@ -217,9 +211,6 @@ class PoolManager
 
     /**
      * Closes all connections and shuts down the pool.
-     *
-     * This method closes all idle connections and rejects any pending connection requests.
-     * The pool is reset to an empty state and cannot be used until re-initialized.
      */
     public function close(): void
     {
@@ -263,13 +254,17 @@ class PoolManager
 
         // Check all connections currently in the pool
         while (!$this->pool->isEmpty()) {
+            /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
             $stats['total_checked']++;
+
+            $connection->resume();
 
             $checkPromises[] = $connection->ping()
                 ->then(
                     function () use ($connection, $tempQueue, &$stats) {
                         $stats['healthy']++;
+                        $connection->pause();
                         $tempQueue->enqueue($connection);
                     },
                     function () use ($connection, &$stats) {
@@ -306,7 +301,6 @@ class PoolManager
 
     public function __destruct()
     {
-        echo "pool manager destructor called\n";
         $this->close();
     }
 }

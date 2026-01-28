@@ -21,12 +21,18 @@ use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Socket\Interfaces\ConnectorInterface;
+use LogicException;
 use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
+use RuntimeException;
+use SplQueue;
+use Throwable;
 
 /**
- * @internal Used internally by the connection pool
+ * Represents a single TCP connection to the MySQL server.
+ *
+ * @internal Used internally by the Connection Pool.
  */
 class Connection
 {
@@ -42,9 +48,16 @@ class Connection
     private ?Promise $connectPromise = null;
     private bool $isClosingError = false;
     private bool $isUserClosing = false;
-    private \SplQueue $commandQueue;
+
+    /** @var SplQueue<CommandRequest> */
+    private SplQueue $commandQueue;
+
     private ?CommandRequest $currentCommand = null;
 
+    /**
+     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param ConnectorInterface|null $connector
+     */
     public function __construct(
         ConnectionParams|array|string $config,
         private readonly ?ConnectorInterface $connector = null
@@ -55,10 +68,14 @@ class Connection
             \is_string($config) => ConnectionParams::fromUri($config),
         };
 
-        $this->commandQueue = new \SplQueue();
+        $this->commandQueue = new SplQueue();
     }
 
     /**
+     * Creates and connects a new Connection instance.
+     *
+     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param ConnectorInterface|null $connector
      * @return PromiseInterface<self>
      */
     public static function create(
@@ -71,14 +88,14 @@ class Connection
     }
 
     /**
-     * Establish connection to the MySQL server.
+     * Establishes the TCP connection and performs the MySQL Handshake.
      *
      * @return PromiseInterface<self>
      */
     public function connect(): PromiseInterface
     {
         if ($this->state !== ConnectionState::DISCONNECTED) {
-            return Promise::rejected(new \LogicException('Connection is already active'));
+            return Promise::rejected(new LogicException('Connection is already active'));
         }
 
         $this->state = ConnectionState::CONNECTING;
@@ -104,12 +121,34 @@ class Connection
     }
 
     /**
-     * Execute a SELECT query and return all rows buffered in memory.
+     * Pauses the connection by pausing the socket stream.
      *
-     * Use this for small to medium result sets. For large result sets
-     * that may exceed available memory, use streamQuery() instead.
+     * This removes the socket from the Event Loop's read watcher.
+     * If all connections are suspended, the Event Loop will automatically exit.
+     */
+    public function pause(): void
+    {
+        if ($this->socket) {
+            $this->socket->pause();
+        }
+    }
+
+    /**
+     * Resumes the connection by un-pausing the socket stream.
      *
-     * @param string $sql The SQL query to execute
+     * This re-adds the socket to the Event Loop to receive data.
+     */
+    public function resume(): void
+    {
+        if ($this->socket) {
+            $this->socket->resume();
+        }
+    }
+
+    /**
+     * Executes a standard SQL query (buffered).
+     *
+     * @param string $sql
      * @return PromiseInterface<QueryResult>
      */
     public function query(string $sql): PromiseInterface
@@ -118,9 +157,9 @@ class Connection
     }
 
     /**
-     * Execute a SQL statement (INSERT, UPDATE, DELETE, etc.).
+     * Executes a SQL command (INSERT, UPDATE, DELETE).
      *
-     * @param string $sql The SQL command to execute
+     * @param string $sql
      * @return PromiseInterface<ExecuteResult>
      */
     public function execute(string $sql): PromiseInterface
@@ -129,13 +168,13 @@ class Connection
     }
 
     /**
-     * Stream a SELECT query row-by-row without buffering in memory.
-     * 
-     * @param string $sql The SQL SELECT query to execute
-     * @param callable(array): void $onRow Callback invoked for each row
-     * @param callable(StreamStats): void|null $onComplete Optional callback when streaming completes
-     * @param callable(\Throwable): void|null $onError Optional callback for error handling
-     * @return PromiseInterface<StreamStats> Resolves with streaming statistics
+     * Streams a SELECT query row-by-row.
+     *
+     * @param string $sql
+     * @param callable(array): void $onRow
+     * @param callable(StreamStats): void|null $onComplete
+     * @param callable(Throwable): void|null $onError
+     * @return PromiseInterface<StreamStats>
      */
     public function streamQuery(
         string $sql,
@@ -148,9 +187,9 @@ class Connection
     }
 
     /**
-     * Begin a transaction.
+     * Begins a database transaction.
      *
-     * @param IsolationLevel|null $isolationLevel Optional isolation level for this transaction
+     * @param IsolationLevel|null $isolationLevel
      * @return PromiseInterface<Transaction>
      */
     public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
@@ -168,9 +207,9 @@ class Connection
     }
 
     /**
-     * Prepare a SQL statement for execution.
+     * Prepares a SQL statement.
      *
-     * @param string $sql The SQL statement with placeholders (?)
+     * @param string $sql
      * @return PromiseInterface<PreparedStatement>
      */
     public function prepare(string $sql): PromiseInterface
@@ -179,7 +218,7 @@ class Connection
     }
 
     /**
-     * Ping the server to check if connection is alive.
+     * Pings the server.
      *
      * @return PromiseInterface<bool>
      */
@@ -189,7 +228,9 @@ class Connection
     }
 
     /**
-     * Close the connection gracefully.
+     * Closes the connection and releases resources.
+     *
+     * @return void
      */
     public function close(): void
     {
@@ -205,6 +246,7 @@ class Connection
             $this->socket = null;
         }
 
+        // Release references to help GC
         $this->packetReader = null;
         $this->handshakeHandler = null;
         $this->queryHandler = null;
@@ -213,23 +255,31 @@ class Connection
         $this->pingHandler = null;
 
         if ($this->connectPromise) {
-            $this->connectPromise->reject(new \RuntimeException('Connection closed by user'));
+            $this->connectPromise->reject(new RuntimeException('Connection closed by user'));
             $this->connectPromise = null;
         }
 
         if ($this->currentCommand) {
-            $this->currentCommand->promise->reject(new \RuntimeException('Connection closed by user'));
+            $this->currentCommand->promise->reject(new RuntimeException('Connection closed by user'));
             $this->currentCommand = null;
         }
 
         while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(new \RuntimeException('Connection closed by user'));
+            $cmd->promise->reject(new RuntimeException('Connection closed by user'));
         }
     }
 
     /**
-     * Get the current connection state.
+     * Destructor to ensure resources are released if object falls out of scope.
+     */
+    public function __destruct()
+    {
+        $this->close();
+    }
+
+    /**
+     * Get the current state.
      */
     public function getState(): ConnectionState
     {
@@ -245,7 +295,7 @@ class Connection
     }
 
     /**
-     * Check if the connection is closed.
+     * Check if the connection has been close
      */
     public function isClosed(): bool
     {
@@ -257,7 +307,7 @@ class Connection
     // ================================================================================================================
 
     /**
-     * @internal Called by PreparedStatement to execute bound parameters.
+     * @internal
      * @return PromiseInterface<ExecuteResult|QueryResult>
      */
     public function executeStatement(PreparedStatement $stmt, array $params): PromiseInterface
@@ -272,11 +322,7 @@ class Connection
     }
 
     /**
-     * @internal Called by PreparedStatement to execute with streaming.
-     * @return PromiseInterface<StreamStats>
-     */
-    /**
-     * @internal Called by PreparedStatement to execute with streaming.
+     * @internal
      * @return PromiseInterface<StreamStats>
      */
     public function executeStatementStream(
@@ -296,7 +342,7 @@ class Connection
     }
 
     /**
-     * @internal Called by PreparedStatement to close itself.
+     * @internal
      * @return PromiseInterface<void>
      */
     public function closeStatement(int $stmtId): PromiseInterface
@@ -310,7 +356,7 @@ class Connection
     }
 
     // ================================================================================================================
-    // Private Logic (Queue & Handlers)
+    // Private Logic
     // ================================================================================================================
 
     private function enqueueCommand(
@@ -476,27 +522,27 @@ class Connection
                     break;
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->handleError($e);
         }
     }
 
-    private function handleConnectionError(\Throwable $e): void
+    private function handleConnectionError(Throwable $e): void
     {
         $this->handleError($e);
     }
 
-    private function handleHandshakeError(\Throwable $e): void
+    private function handleHandshakeError(Throwable $e): void
     {
         $this->handleError($e);
     }
 
-    private function handleSocketError(\Throwable $e): void
+    private function handleSocketError(Throwable $e): void
     {
         $this->handleError($e);
     }
 
-    private function handleError(\Throwable $e): void
+    private function handleError(Throwable $e): void
     {
         if ($this->isClosingError) {
             return;
@@ -514,7 +560,7 @@ class Connection
         }
         while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(new \RuntimeException('Connection closed before execution', 0, $e));
+            $cmd->promise->reject(new RuntimeException('Connection closed before execution', 0, $e));
         }
         if ($this->socket) {
             $this->socket->close();
@@ -531,7 +577,7 @@ class Connection
 
         $this->state = ConnectionState::CLOSED;
 
-        $exception = new \RuntimeException('Connection closed unexpectedly');
+        $exception = new RuntimeException('Connection closed unexpectedly');
 
         if ($this->connectPromise) {
             $this->connectPromise->reject($exception);

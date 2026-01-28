@@ -54,7 +54,6 @@ final class MysqlClient
             $this->pool = new PoolManager($config, $poolSize);
             $this->isInitialized = true;
 
-            register_shutdown_function($this->close(...));
         } catch (\InvalidArgumentException $e) {
             throw new ConfigurationException(
                 'Invalid database configuration: ' . $e->getMessage(),
@@ -165,7 +164,7 @@ final class MysqlClient
      *
      * @param string $sql SQL statement to execute with optional ? placeholders
      * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<ExecuteResult|QueryResult> Promise resolving to execution result
+     * @return PromiseInterface<ExecuteResult> Promise resolving to execution result
      *
      * @throws NotInitializedException If this instance is not initialized
      */
@@ -277,30 +276,6 @@ final class MysqlClient
     }
 
     /**
-     * Pings the server to check if a connection is alive.
-     *
-     * @return PromiseInterface<bool> Promise resolving to true if connection is alive
-     *
-     * @throws NotInitializedException If this instance is not initialized
-     */
-    public function ping(): PromiseInterface
-    {
-        $pool = $this->getPool();
-        $connection = null;
-
-        return $pool->get()
-            ->then(function (Connection $conn) use (&$connection) {
-                $connection = $conn;
-                return $conn->ping();
-            })
-            ->finally(function () use ($pool, &$connection) {
-                if ($connection !== null) {
-                    $pool->release($connection);
-                }
-            });
-    }
-
-    /**
      * Performs a health check on all idle connections in the pool.
      *
      * @return PromiseInterface<array<string, int>> Promise resolving to health statistics
@@ -378,7 +353,6 @@ final class MysqlClient
      */
     public function __destruct()
     {
-        echo "mysql client destruct called\n";
         $this->close();
     }
 
