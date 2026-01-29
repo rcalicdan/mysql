@@ -11,6 +11,7 @@ use Hibla\Mysql\Handlers\HandshakeHandler;
 use Hibla\Mysql\Handlers\PingHandler;
 use Hibla\Mysql\Handlers\PrepareHandler;
 use Hibla\Mysql\Handlers\QueryHandler;
+use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\CommandRequest;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Mysql\ValueObjects\ExecuteStreamContext;
@@ -30,29 +31,53 @@ use SplQueue;
 use Throwable;
 
 /**
- * Represents a single TCP connection to the MySQL server.
+ * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
  *
- * @internal Used internally by the Connection Pool.
+ * Represents a single, raw TCP connection to the MySQL server. This class
+ * manages the protocol state, command queue, and I/O for one socket.
+ *
+ * The public-facing API is provided by the `MysqlClient` class, which handles
+ * connection pooling and the lifecycle of these `Connection` objects. You
+ * should always interact with the database through the `MysqlClient`.
+ *
+ * This class is not subject to any backward compatibility (BC) guarantees. Its
+ * methods, properties, and overall behavior may change without notice in any
+ * patch, minor, or major version.
+ *
+ * @see \Hibla\Mysql\MysqlClient
  */
 class Connection
 {
-    private readonly ConnectionParams $params;
-    private ConnectionState $state = ConnectionState::DISCONNECTED;
-    private ?SocketConnection $socket = null;
-    private ?UncompressedPacketReader $packetReader = null;
-    private ?HandshakeHandler $handshakeHandler = null;
-    private ?QueryHandler $queryHandler = null;
-    private ?PingHandler $pingHandler = null;
-    private ?PrepareHandler $prepareHandler = null;
-    private ?ExecuteHandler $executeHandler = null;
-    private ?Promise $connectPromise = null;
-    private bool $isClosingError = false;
-    private bool $isUserClosing = false;
-
-    /** @var SplQueue<CommandRequest> */
+    /**
+     *  @var SplQueue<CommandRequest> 
+     */
     private SplQueue $commandQueue;
 
+    private readonly ConnectionParams $params;
+
+    private ConnectionState $state = ConnectionState::DISCONNECTED;
+
+    private ?SocketConnection $socket = null;
+
+    private ?UncompressedPacketReader $packetReader = null;
+
+    private ?HandshakeHandler $handshakeHandler = null;
+
+    private ?QueryHandler $queryHandler = null;
+
+    private ?PingHandler $pingHandler = null;
+
+    private ?PrepareHandler $prepareHandler = null;
+
+    private ?ExecuteHandler $executeHandler = null;
+
+    private ?Promise $connectPromise = null;
+
     private ?CommandRequest $currentCommand = null;
+
+    private bool $isClosingError = false;
+
+    private bool $isUserClosing = false;
 
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
@@ -188,23 +213,26 @@ class Connection
     }
 
     /**
-     * Begins a database transaction.
-     *
-     * @param IsolationLevel|null $isolationLevel
+     * Begins a database transaction on this specific connection.
+     * 
+     * @param IsolationLevel|null $isolationLevel The isolation level to set.
+     * @param PoolManager|null $pool The pool manager to pass to the transaction for auto-release.
      * @return PromiseInterface<Transaction>
      */
-    public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
+    public function beginTransaction(?IsolationLevel $isolationLevel = null, ?PoolManager $pool = null): PromiseInterface
     {
-        if ($isolationLevel === null) {
+        $startTransaction = function () use ($pool) {
             return $this->query('START TRANSACTION')->then(
-                fn () => new Transaction($this)
+                fn() => new Transaction($this, $pool)
             );
+        };
+
+        if ($isolationLevel === null) {
+            return $startTransaction();
         }
 
         return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
-            ->then(fn () => $this->query('START TRANSACTION'))
-            ->then(fn () => new Transaction($this))
-        ;
+            ->then($startTransaction);
     }
 
     /**
@@ -303,12 +331,7 @@ class Connection
         return $this->state === ConnectionState::CLOSED;
     }
 
-    // ================================================================================================================
-    // Internal API (Used by PreparedStatement)
-    // ================================================================================================================
-
     /**
-     * @internal
      * @return PromiseInterface<ExecuteResult|QueryResult>
      */
     public function executeStatement(PreparedStatement $stmt, array $params): PromiseInterface
@@ -323,7 +346,6 @@ class Connection
     }
 
     /**
-     * @internal
      * @return PromiseInterface<StreamStats>
      */
     public function executeStatementStream(
@@ -343,7 +365,6 @@ class Connection
     }
 
     /**
-     * @internal
      * @return PromiseInterface<void>
      */
     public function closeStatement(int $stmtId): PromiseInterface
@@ -355,10 +376,6 @@ class Connection
             $stmtId
         );
     }
-
-    // ================================================================================================================
-    // Private Logic
-    // ================================================================================================================
 
     private function enqueueCommand(
         string $type,

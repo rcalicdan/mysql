@@ -14,11 +14,20 @@ use SplQueue;
 use Throwable;
 
 /**
- * Manages a pool of asynchronous MySQL connections.
+ * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
  *
- * This class provides a robust mechanism for managing a limited number of database
- * connections, preventing resource exhaustion. It integrates with the Event Loop
- * to allow automatic script termination when connections are idle.
+ * Manages a pool of asynchronous MySQL connections. This class is the core
+ * component responsible for creating, reusing, and managing the lifecycle
+ * of individual `Connection` objects to prevent resource exhaustion.
+ *
+ * All pooling logic is handled automatically by the `MysqlClient`. You should
+ * never need to interact with the `PoolManager` directly.
+ *
+ * This class is not subject to any backward compatibility (BC) guarantees. Its
+ * methods, properties, and overall behavior may change without notice in any
+ * patch, minor, or major version.
+ *
+ * @see \Hibla\Mysql\MysqlClient
  */
 class PoolManager
 {
@@ -58,15 +67,41 @@ class PoolManager
     private bool $configValidated = false;
 
     /**
+     * @var int Idle timeout in nanoseconds.
+     */
+    private int $idleTimeoutNanos;
+
+    /**
+     * @var int Max lifetime in nanoseconds.
+     */
+    private int $maxLifetimeNanos;
+
+    /**
+     * @var array<int, int> Tracks last usage timestamp (hrtime) for each connection.
+     */
+    private array $connectionLastUsed = [];
+
+    /**
+     * @var array<int, int> Tracks creation timestamp (hrtime) for each connection.
+     */
+    private array $connectionCreatedAt = [];
+
+    /**
      * Creates a new MySQL connection pool.
      *
      * @param ConnectionParams|array<string, mixed>|string $config The database connection parameters.
      * @param int $maxSize The maximum number of connections this pool can manage.
+     * @param int $idleTimeout Seconds a connection can stay idle before closure (default: 300 / 5 mins).
+     * @param int $maxLifetime Seconds a connection can live in total before rotation (default: 3600 / 1 hour).
      *
      * @throws InvalidArgumentException If the database configuration is invalid.
      */
-    public function __construct(ConnectionParams|array|string $config, int $maxSize = 10)
-    {
+    public function __construct(
+        ConnectionParams|array|string $config,
+        int $maxSize = 10,
+        int $idleTimeout = 300,
+        int $maxLifetime = 3600
+    ) {
         $this->connectionParams = match (true) {
             $config instanceof ConnectionParams => $config,
             \is_array($config) => ConnectionParams::fromArray($config),
@@ -77,8 +112,20 @@ class PoolManager
             throw new InvalidArgumentException('Pool max size must be greater than 0');
         }
 
+        if ($idleTimeout <= 0) {
+            throw new InvalidArgumentException('Idle timeout must be greater than 0');
+        }
+
+        if ($maxLifetime <= 0) {
+            throw new InvalidArgumentException('Max lifetime must be greater than 0');
+        }
+
         $this->configValidated = true;
         $this->maxSize = $maxSize;
+        
+        $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
+        $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
+        
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
     }
@@ -86,30 +133,55 @@ class PoolManager
     /**
      * Asynchronously acquires a connection from the pool.
      *
+     * Uses "Check-on-Borrow" strategy:
+     * 1. Checks if the idle connection has exceeded idle timeout.
+     * 2. Checks if the connection has exceeded max lifetime.
+     * 3. Checks if the connection is still alive (TCP state).
+     *
      * @return PromiseInterface<MysqlConnection> A promise that resolves with a database connection.
      */
     public function get(): PromiseInterface
     {
-        // Check for idle connection
-        if (! $this->pool->isEmpty()) {
+        while (! $this->pool->isEmpty()) {
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
+            
+            $connId = spl_object_id($connection);
+            $now = hrtime(true);
+            
+            $lastUsed = $this->connectionLastUsed[$connId] ?? 0;
+            $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
 
-            // Verify connection is still alive
-            if ($connection->isReady()) {
-                // Resume the connection (re-attach event loop listeners) so it can receive data
-                $connection->resume();
-
-                $this->lastConnection = $connection;
-
-                return Promise::resolved($connection);
+            // 1. Check Idle Timeout
+            if (($now - $lastUsed) > $this->idleTimeoutNanos) {
+                $this->removeConnection($connection);
+                continue;
             }
 
-            // Connection is dead, decrement counter and continue
-            $this->activeConnections--;
+            // 2. Check Max Lifetime
+            if (($now - $createdAt) > $this->maxLifetimeNanos) {
+                $this->removeConnection($connection);
+                continue;
+            }
+
+            // 3. Check Connection Health (TCP State)
+            if (! $connection->isReady() || $connection->isClosed()) {
+                $this->removeConnection($connection);
+                continue;
+            }
+
+            // Valid Connection Found!
+            // Remove from idle tracking (it's active now)
+            unset($this->connectionLastUsed[$connId]);
+            
+            // Resume the connection (re-attach event loop listeners)
+            $connection->resume();
+            $this->lastConnection = $connection;
+
+            return Promise::resolved($connection);
         }
 
-        // Create new connection if under capacity
+        // If here: pool is empty or we discarded all stale connections.
         if ($this->activeConnections < $this->maxSize) {
             $this->activeConnections++;
 
@@ -118,7 +190,10 @@ class PoolManager
             MysqlConnection::create($this->connectionParams)
                 ->then(
                     function (MysqlConnection $connection) use ($promise) {
-                        // New connections are created in 'active' state (resumed), so we use them directly
+                        // Track creation time for Max Lifetime
+                        $connId = spl_object_id($connection);
+                        $this->connectionCreatedAt[$connId] = hrtime(true);
+
                         $this->lastConnection = $connection;
                         $promise->resolve($connection);
                     },
@@ -149,26 +224,10 @@ class PoolManager
     {
         // Check if connection is still alive
         if ($connection->isClosed() || ! $connection->isReady()) {
-            $this->activeConnections--;
+            $this->removeConnection($connection);
 
-            // If a waiter exists and we have capacity, create a new connection for them
             if (! $this->waiters->isEmpty() && $this->activeConnections < $this->maxSize) {
-                $this->activeConnections++;
-                /** @var Promise<MysqlConnection> $promise */
-                $promise = $this->waiters->dequeue();
-
-                MysqlConnection::create($this->connectionParams)
-                    ->then(
-                        function (MysqlConnection $newConnection) use ($promise) {
-                            $this->lastConnection = $newConnection;
-                            $promise->resolve($newConnection);
-                        },
-                        function (Throwable $e) use ($promise) {
-                            $this->activeConnections--;
-                            $promise->reject($e);
-                        }
-                    )
-                ;
+                $this->createConnectionForWaiter();
             }
 
             return;
@@ -179,9 +238,25 @@ class PoolManager
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
             $this->lastConnection = $connection;
+            // Connection stays active (resumed) for the waiter
             $promise->resolve($connection);
         } else {
+            // No waiters. Pause the connection to let the loop exit if idle.
             $connection->pause();
+
+            $connId = spl_object_id($connection);
+            $now = hrtime(true);
+
+            // If it expired while being used, discard it now rather than later.
+            $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
+            if (($now - $createdAt) > $this->maxLifetimeNanos) {
+                $this->removeConnection($connection);
+                return;
+            }
+
+            // Track last usage time for Idle Timeout
+            $this->connectionLastUsed[$connId] = $now;
+
             $this->pool->enqueue($connection);
         }
     }
@@ -209,6 +284,7 @@ class PoolManager
             'waiting_requests' => $this->waiters->count(),
             'max_size' => $this->maxSize,
             'config_validated' => $this->configValidated,
+            'tracked_connections' => count($this->connectionCreatedAt),
         ];
     }
 
@@ -217,7 +293,6 @@ class PoolManager
      */
     public function close(): void
     {
-        // Close all idle connections
         while (! $this->pool->isEmpty()) {
             $connection = $this->pool->dequeue();
             if (! $connection->isClosed()) {
@@ -225,7 +300,6 @@ class PoolManager
             }
         }
 
-        // Reject all waiting requests
         while (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
@@ -236,6 +310,9 @@ class PoolManager
         $this->waiters = new SplQueue();
         $this->activeConnections = 0;
         $this->lastConnection = null;
+    
+        $this->connectionLastUsed = [];
+        $this->connectionCreatedAt = [];
     }
 
     /**
@@ -268,17 +345,17 @@ class PoolManager
                     function () use ($connection, $tempQueue, &$stats) {
                         $stats['healthy']++;
                         $connection->pause();
+                        
+                        $connId = spl_object_id($connection);
+                        $this->connectionLastUsed[$connId] = hrtime(true);
+                        
                         $tempQueue->enqueue($connection);
                     },
                     function () use ($connection, &$stats) {
                         $stats['unhealthy']++;
-                        $this->activeConnections--;
-                        if (! $connection->isClosed()) {
-                            $connection->close();
-                        }
+                        $this->removeConnection($connection);
                     }
-                )
-            ;
+                );
         }
 
         // Wait for all pings to complete
@@ -302,6 +379,55 @@ class PoolManager
         ;
 
         return $promise;
+    }
+
+    /**
+     * Removes and closes a connection, cleaning up all tracking data.
+     *
+     * @param MysqlConnection $connection The connection to remove.
+     * @return void
+     */
+    private function removeConnection(MysqlConnection $connection): void
+    {
+        if (! $connection->isClosed()) {
+            $connection->close();
+        }
+        
+        $connId = spl_object_id($connection);
+        unset($this->connectionLastUsed[$connId]);
+        unset($this->connectionCreatedAt[$connId]);
+        
+        $this->activeConnections--;
+    }
+
+    /**
+     * Creates a new connection for a waiting request.
+     *
+     * @return void
+     */
+    private function createConnectionForWaiter(): void
+    {
+        $this->activeConnections++;
+        
+        /** @var Promise<MysqlConnection> $promise */
+        $promise = $this->waiters->dequeue();
+
+        MysqlConnection::create($this->connectionParams)
+            ->then(
+                function (MysqlConnection $newConnection) use ($promise) {
+                    // Track creation time for Max Lifetime
+                    $connId = spl_object_id($newConnection);
+                    $this->connectionCreatedAt[$connId] = hrtime(true);
+
+                    $this->lastConnection = $newConnection;
+                    $promise->resolve($newConnection);
+                },
+                function (Throwable $e) use ($promise) {
+                    $this->activeConnections--;
+                    $promise->reject($e);
+                }
+            )
+        ;
     }
 
     public function __destruct()

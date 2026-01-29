@@ -4,17 +4,22 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql;
 
+use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\ExecuteResult;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Transaction;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
+
+use function Hibla\async;
+use function Hibla\await;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -41,18 +46,26 @@ final class MysqlClient
      *        - ConnectionParams object, or
      *        - Array with keys: host, port, user, password, database, or
      *        - DSN string: mysql://user:password@host:port/database
-     * @param int $maxConnections Maximum number of connections in the pool
+     * @param int $maxConnections Maximum number of connections in the pool (default: 10)
+     * @param int $idleTimeout Seconds a connection can remain idle before being closed (default: 60)
+     * @param int $maxLifetime Maximum seconds a connection can live before being rotated (default: 3600)
      *
      * @throws ConfigurationException If configuration is invalid
      */
     public function __construct(
         ConnectionParams|array|string $config,
-        int $maxConnections = 10
+        int $maxConnections = 10,
+        int $idleTimeout = 60,
+        int $maxLifetime = 3600
     ) {
         try {
-            $this->pool = new PoolManager($config, $maxConnections);
+            $this->pool = new PoolManager(
+                $config,
+                $maxConnections,
+                $idleTimeout,
+                $maxLifetime
+            );
             $this->isInitialized = true;
-
         } catch (\InvalidArgumentException $e) {
             throw new ConfigurationException(
                 'Invalid database configuration: ' . $e->getMessage(),
@@ -144,18 +157,25 @@ final class MysqlClient
                     return $conn->query($sql);
                 }
 
+                /** @var PreparedStatement|null $stmtRef */
+                $stmtRef = null;
+
                 return $conn->prepare($sql)
-                    ->then(function (PreparedStatement $stmt) use ($params) {
+                    ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
+                        $stmtRef = $stmt;
                         return $stmt->executeStatement($params);
                     })
-                ;
+                    ->finally(function () use (&$stmtRef) {
+                        if ($stmtRef !== null) {
+                            return $stmtRef->close();
+                        }
+                    });
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            })
-        ;
+            });
     }
 
     /**
@@ -183,18 +203,25 @@ final class MysqlClient
                     return $conn->execute($sql);
                 }
 
+                /** @var PreparedStatement|null $stmtRef */
+                $stmtRef = null;
+
                 return $conn->prepare($sql)
-                    ->then(function (PreparedStatement $stmt) use ($params) {
+                    ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
+                        $stmtRef = $stmt;
                         return $stmt->executeStatement($params);
                     })
-                ;
+                    ->finally(function () use (&$stmtRef) {
+                        if ($stmtRef !== null) {
+                            return $stmtRef->close();
+                        }
+                    });
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            })
-        ;
+            });
     }
 
     /**
@@ -282,6 +309,113 @@ final class MysqlClient
                 }
             })
         ;
+    }
+
+    /**
+     * Begins a database transaction manually.
+     *
+     * Returns a Transaction that automatically releases the connection
+     * back to the pool when commit() or rollback() is called.
+     *
+     * The Transaction object has all the same methods as MysqlClient
+     * (query, execute, fetchOne, fetchValue, prepare) for convenience.
+     *
+     * Example:
+     * ```php
+     * $tx = await($client->beginTransaction());
+     * await($tx->execute('INSERT INTO users (name) VALUES (?)', ['Alice']));
+     * await($tx->commit());
+     * ```
+     *
+     * For automatic transaction management with auto-commit/rollback,
+     * use the transaction() method instead.
+     *
+     * @param IsolationLevel|null $isolationLevel Optional transaction isolation level
+     * @return PromiseInterface<Transaction> Promise resolving to transaction object
+     *
+     * @throws NotInitializedException If this instance is not initialized
+     */
+    public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
+    {
+        $pool = $this->getPool();
+        $connection = null;
+
+        return $pool->get()
+            ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
+                $connection = $conn;
+
+                return $conn->beginTransaction($isolationLevel, $pool);
+            })
+            ->catch(function (\Throwable $e) use ($pool, &$connection) {
+                if ($connection !== null) {
+                    $pool->release($connection);
+                }
+
+                throw $e;
+            });
+    }
+
+    /**
+     * Executes a callback within a database transaction with automatic management and retries.
+     *
+     * The callback is automatically wrapped in a Fiber.
+     * If the callback or commit fails, the transaction is rolled back.
+     * If $attempts > 1, the process (Begin -> Callback -> Commit) is retried.
+     *
+     * @template TResult
+     *
+     * @param callable(Transaction): (PromiseInterface<TResult>|TResult) $callback 
+     * @param int $attempts Number of times to attempt the transaction (default: 1)
+     * @param IsolationLevel|null $isolationLevel 
+     * @return PromiseInterface<TResult>
+     *
+     * @throws NotInitializedException
+     * @throws \Throwable The final exception if all attempts fail
+     */
+    public function transaction(
+        callable $callback,
+        int $attempts = 1,
+        ?IsolationLevel $isolationLevel = null
+    ): PromiseInterface {
+        if ($attempts < 1) {
+            throw new \InvalidArgumentException("Attempts must be at least 1");
+        }
+
+        return async(function () use ($callback, $attempts, $isolationLevel) {
+            $lastError = null;
+
+            for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+                $tx = null;
+
+                try {
+                    /** @var Transaction $tx */
+                    $tx = await($this->beginTransaction($isolationLevel));
+
+                    $result = await(async(fn() => $callback($tx)));
+
+                    await($tx->commit());
+
+                    return $result;
+                } catch (\Throwable $e) {
+                    $lastError = $e;
+
+                    if ($tx !== null && $tx->isActive()) {
+                        try {
+                            await($tx->rollback());
+                        } catch (\Throwable $rollbackError) {
+                            // If rollback fails (e.g. connection lost), we continue to the retry logic
+                            // but keep the original error ($e) as the primary cause.
+                        }
+                    }
+
+                    if ($attempt === $attempts) {
+                        break;
+                    }
+                }
+            }
+
+            throw $lastError;
+        });
     }
 
     /**
