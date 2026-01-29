@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Handlers;
+namespace Hibla\Mysql\Handlers;
 
-use Hibla\MysqlClient\Enums\ParserState;
-use Hibla\MysqlClient\Internals\ExecuteResult;
-use Hibla\MysqlClient\Internals\QueryResult;
-use Hibla\MysqlClient\ValueObjects\StreamContext;
-use Hibla\MysqlClient\ValueObjects\StreamStats;
+use Hibla\Mysql\Enums\ParserState;
+use Hibla\Mysql\Internals\ExecuteResult;
+use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\ValueObjects\StreamContext;
+use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
@@ -32,7 +32,7 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  * - Streaming: Rows delivered via callback with StreamStats result
  *
  * @internal
- * @package Hibla\MysqlClient\Handlers
+ * @package Hibla\Mysql\Handlers
  */
 final class QueryHandler
 {
@@ -248,6 +248,7 @@ final class QueryHandler
                     if ($this->streamContext->onError !== null) {
                         ($this->streamContext->onError)($e);
                     }
+
                     throw $e;
                 }
             } else {

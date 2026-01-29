@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Handlers;
+namespace Hibla\Mysql\Handlers;
 
 use Hibla\EventLoop\Loop;
-use Hibla\MysqlClient\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;

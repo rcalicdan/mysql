@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Internals;
+namespace Hibla\Mysql\Internals;
 
 /**
  * Represents the result of a write operation (INSERT, UPDATE, DELETE, etc.).

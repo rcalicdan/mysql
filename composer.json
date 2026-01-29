@@ -1,7 +1,7 @@
 {
     "autoload": {
         "psr-4": {
-            "Hibla\\MysqlClient\\": "src/"
+            "Hibla\\Mysql\\": "src/"
         }
     },
     "autoload-dev": {

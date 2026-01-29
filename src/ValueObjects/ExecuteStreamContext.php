@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\ValueObjects;
+namespace Hibla\Mysql\ValueObjects;
 
-use Hibla\MysqlClient\Internals\PreparedStatement;
+use Hibla\Mysql\Internals\PreparedStatement;
 
 /**
  * Context for streaming prepared statement execution.
- * 
+ *
  * @internal
- * @package Hibla\MysqlClient\ValueObjects
+ * @package Hibla\Mysql\ValueObjects
  */
 final readonly class ExecuteStreamContext
 {

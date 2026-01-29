@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\ValueObjects;
+namespace Hibla\Mysql\ValueObjects;
 
 /**
  * Statistics about a completed stream operation.
@@ -10,7 +10,7 @@ namespace Hibla\MysqlClient\ValueObjects;
  * Provides metadata about the streaming query execution,
  * including row count, column count, and duration.
  *
- * @package Hibla\MysqlClient\ValueObjects
+ * @package Hibla\Mysql\ValueObjects
  */
 final class StreamStats
 {

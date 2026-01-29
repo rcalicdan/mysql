@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Manager;
+namespace Hibla\Mysql\Manager;
 
-use Hibla\MysqlClient\Exceptions\PoolException;
-use Hibla\MysqlClient\Internals\Connection as MysqlConnection;
-use Hibla\MysqlClient\ValueObjects\ConnectionParams;
+use Hibla\Mysql\Exceptions\PoolException;
+use Hibla\Mysql\Internals\Connection as MysqlConnection;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use InvalidArgumentException;
@@ -91,19 +91,20 @@ class PoolManager
     public function get(): PromiseInterface
     {
         // Check for idle connection
-        if (!$this->pool->isEmpty()) {
+        if (! $this->pool->isEmpty()) {
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
-            
+
             // Verify connection is still alive
             if ($connection->isReady()) {
                 // Resume the connection (re-attach event loop listeners) so it can receive data
                 $connection->resume();
-                
+
                 $this->lastConnection = $connection;
+
                 return Promise::resolved($connection);
             }
-            
+
             // Connection is dead, decrement counter and continue
             $this->activeConnections--;
         }
@@ -113,7 +114,7 @@ class PoolManager
             $this->activeConnections++;
 
             $promise = new Promise();
-            
+
             MysqlConnection::create($this->connectionParams)
                 ->then(
                     function (MysqlConnection $connection) use ($promise) {
@@ -125,7 +126,8 @@ class PoolManager
                         $this->activeConnections--;
                         $promise->reject($e);
                     }
-                );
+                )
+            ;
 
             return $promise;
         }
@@ -146,11 +148,11 @@ class PoolManager
     public function release(MysqlConnection $connection): void
     {
         // Check if connection is still alive
-        if ($connection->isClosed() || !$connection->isReady()) {
+        if ($connection->isClosed() || ! $connection->isReady()) {
             $this->activeConnections--;
-            
+
             // If a waiter exists and we have capacity, create a new connection for them
-            if (!$this->waiters->isEmpty() && $this->activeConnections < $this->maxSize) {
+            if (! $this->waiters->isEmpty() && $this->activeConnections < $this->maxSize) {
                 $this->activeConnections++;
                 /** @var Promise<MysqlConnection> $promise */
                 $promise = $this->waiters->dequeue();
@@ -165,14 +167,15 @@ class PoolManager
                             $this->activeConnections--;
                             $promise->reject($e);
                         }
-                    );
+                    )
+                ;
             }
 
             return;
         }
 
         // Prioritize giving the connection to a waiting request
-        if (!$this->waiters->isEmpty()) {
+        if (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
             $this->lastConnection = $connection;
@@ -215,20 +218,20 @@ class PoolManager
     public function close(): void
     {
         // Close all idle connections
-        while (!$this->pool->isEmpty()) {
+        while (! $this->pool->isEmpty()) {
             $connection = $this->pool->dequeue();
-            if (!$connection->isClosed()) {
+            if (! $connection->isClosed()) {
                 $connection->close();
             }
         }
-        
+
         // Reject all waiting requests
-        while (!$this->waiters->isEmpty()) {
+        while (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
             $promise->reject(new PoolException('Pool is being closed'));
         }
-        
+
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
         $this->activeConnections = 0;
@@ -253,7 +256,7 @@ class PoolManager
         $checkPromises = [];
 
         // Check all connections currently in the pool
-        while (!$this->pool->isEmpty()) {
+        while (! $this->pool->isEmpty()) {
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
             $stats['total_checked']++;
@@ -270,11 +273,12 @@ class PoolManager
                     function () use ($connection, &$stats) {
                         $stats['unhealthy']++;
                         $this->activeConnections--;
-                        if (!$connection->isClosed()) {
+                        if (! $connection->isClosed()) {
                             $connection->close();
                         }
                     }
-                );
+                )
+            ;
         }
 
         // Wait for all pings to complete
@@ -282,19 +286,20 @@ class PoolManager
             ->then(
                 function () use ($promise, $tempQueue, &$stats) {
                     // Return healthy connections back to pool
-                    while (!$tempQueue->isEmpty()) {
+                    while (! $tempQueue->isEmpty()) {
                         $this->pool->enqueue($tempQueue->dequeue());
                     }
                     $promise->resolve($stats);
                 },
                 function (Throwable $e) use ($promise, $tempQueue, &$stats) {
                     // Return any remaining connections back to pool
-                    while (!$tempQueue->isEmpty()) {
+                    while (! $tempQueue->isEmpty()) {
                         $this->pool->enqueue($tempQueue->dequeue());
                     }
                     $promise->reject($e);
                 }
-            );
+            )
+        ;
 
         return $promise;
     }

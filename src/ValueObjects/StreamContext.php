@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\ValueObjects;
+namespace Hibla\Mysql\ValueObjects;
 
 final class StreamContext
 {

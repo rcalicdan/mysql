@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Handlers;
+namespace Hibla\Mysql\Handlers;
 
-use Hibla\MysqlClient\Enums\PrepareState;
-use Hibla\MysqlClient\Internals\Connection as MysqlConnection;
-use Hibla\MysqlClient\Internals\PreparedStatement;
+use Hibla\Mysql\Enums\PrepareState;
+use Hibla\Mysql\Internals\Connection as MysqlConnection;
+use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Rcalicdan\MySQLBinaryProtocol\Constants\PacketType;

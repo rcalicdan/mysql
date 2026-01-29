@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Internals;
+namespace Hibla\Mysql\Internals;
 
-use Hibla\MysqlClient\ValueObjects\StreamContext;
-use Hibla\MysqlClient\ValueObjects\StreamStats;
+use Hibla\Mysql\ValueObjects\StreamContext;
+use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
@@ -19,7 +19,7 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
  * - Improved performance for repeated queries
  * - Support for both buffered and streaming execution
  *
- * @package Hibla\MysqlClient\Internals
+ * @package Hibla\Mysql\Internals
  */
 class PreparedStatement
 {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\ValueObjects;
+namespace Hibla\Mysql\ValueObjects;
 
 use Hibla\Promise\Promise;
 
@@ -10,7 +10,7 @@ use Hibla\Promise\Promise;
  * Represents a queued command to be executed on the MySQL connection.
  *
  * @internal
- * @package Hibla\MysqlClient\ValueObjects
+ * @package Hibla\Mysql\ValueObjects
  */
 final class CommandRequest
 {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Handlers;
+namespace Hibla\Mysql\Handlers;
 
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;

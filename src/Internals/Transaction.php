@@ -2,11 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Internals;
+namespace Hibla\Mysql\Internals;
 
-use Hibla\MysqlClient\Internals\Connection as MysqlConnection;
-use Hibla\MysqlClient\Internals\ExecuteResult;
-use Hibla\MysqlClient\Internals\QueryResult;
+use Hibla\Mysql\Internals\Connection as MysqlConnection;
 use Hibla\Promise\Interfaces\PromiseInterface;
 
 class Transaction
@@ -64,7 +62,8 @@ class Transaction
         $this->active = false;
 
         return $this->connection->query('COMMIT')
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -77,7 +76,8 @@ class Transaction
         $this->active = false;
 
         return $this->connection->query('ROLLBACK')
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -91,7 +91,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -105,7 +106,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -119,7 +121,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**

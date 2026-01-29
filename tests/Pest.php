@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Hibla\EventLoop\Loop;
-use Hibla\MysqlClient\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
 
 uses()
     ->afterEach(function () {

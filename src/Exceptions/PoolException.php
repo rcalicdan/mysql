@@ -1,5 +1,9 @@
 <?php
 
-namespace Hibla\MysqlClient\Exceptions;
+declare(strict_types=1);
 
-class PoolException extends \RuntimeException {}
+namespace Hibla\Mysql\Exceptions;
+
+class PoolException extends \RuntimeException
+{
+}

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Exceptions;
+namespace Hibla\Mysql\Exceptions;
 
 use InvalidArgumentException;
 

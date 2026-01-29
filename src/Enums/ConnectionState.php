@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Enums;
+namespace Hibla\Mysql\Enums;
 
 enum ConnectionState: string
 {

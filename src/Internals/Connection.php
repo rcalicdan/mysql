@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient\Internals;
+namespace Hibla\Mysql\Internals;
 
-use Hibla\MysqlClient\Enums\ConnectionState;
-use Hibla\MysqlClient\Enums\IsolationLevel;
-use Hibla\MysqlClient\Handlers\ExecuteHandler;
-use Hibla\MysqlClient\Handlers\HandshakeHandler;
-use Hibla\MysqlClient\Handlers\PingHandler;
-use Hibla\MysqlClient\Handlers\PrepareHandler;
-use Hibla\MysqlClient\Handlers\QueryHandler;
-use Hibla\MysqlClient\ValueObjects\CommandRequest;
-use Hibla\MysqlClient\ValueObjects\ConnectionParams;
-use Hibla\MysqlClient\ValueObjects\ExecuteStreamContext;
-use Hibla\MysqlClient\ValueObjects\StreamContext;
-use Hibla\MysqlClient\ValueObjects\StreamStats;
+use Hibla\Mysql\Enums\ConnectionState;
+use Hibla\Mysql\Enums\IsolationLevel;
+use Hibla\Mysql\Handlers\ExecuteHandler;
+use Hibla\Mysql\Handlers\HandshakeHandler;
+use Hibla\Mysql\Handlers\PingHandler;
+use Hibla\Mysql\Handlers\PrepareHandler;
+use Hibla\Mysql\Handlers\QueryHandler;
+use Hibla\Mysql\ValueObjects\CommandRequest;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\ExecuteStreamContext;
+use Hibla\Mysql\ValueObjects\StreamContext;
+use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
@@ -183,6 +183,7 @@ class Connection
         ?callable $onError = null
     ): PromiseInterface {
         $context = new StreamContext($onRow, $onComplete, $onError);
+
         return $this->enqueueCommand(CommandRequest::TYPE_STREAM_QUERY, $sql, context: $context);
     }
 
@@ -196,13 +197,13 @@ class Connection
     {
         if ($isolationLevel === null) {
             return $this->query('START TRANSACTION')->then(
-                fn() => new Transaction($this)
+                fn () => new Transaction($this)
             );
         }
 
         return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
-            ->then(fn() => $this->query('START TRANSACTION'))
-            ->then(fn() => new Transaction($this))
+            ->then(fn () => $this->query('START TRANSACTION'))
+            ->then(fn () => new Transaction($this))
         ;
     }
 
@@ -424,6 +425,7 @@ class Connection
             case CommandRequest::TYPE_QUERY:
                 $this->state = ConnectionState::QUERYING;
                 $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_STREAM_QUERY:
@@ -431,16 +433,19 @@ class Connection
                 /** @var StreamContext $streamContext */
                 $streamContext = $this->currentCommand->context;
                 $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise, $streamContext);
+
                 break;
 
             case CommandRequest::TYPE_PING:
                 $this->state = ConnectionState::PINGING;
                 $this->pingHandler->start($this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_PREPARE:
                 $this->state = ConnectionState::PREPARING;
                 $this->prepareHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+
                 break;
 
             case CommandRequest::TYPE_EXECUTE:
@@ -453,6 +458,7 @@ class Connection
                     $stmt->columnDefinitions,
                     $this->currentCommand->promise
                 );
+
                 break;
 
             case CommandRequest::TYPE_EXECUTE_STREAM:
@@ -467,6 +473,7 @@ class Connection
                     $this->currentCommand->promise,
                     $ctx->streamContext
                 );
+
                 break;
 
             case CommandRequest::TYPE_CLOSE_STMT:
@@ -474,6 +481,7 @@ class Connection
                 $this->currentCommand->promise->resolve(null);
                 $this->currentCommand = null;
                 $this->processNextCommand();
+
                 return;
         }
 

@@ -2,20 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Hibla\MysqlClient;
+namespace Hibla\Mysql;
 
-use Hibla\MysqlClient\Exceptions\ConfigurationException;
-use Hibla\MysqlClient\Exceptions\NotInitializedException;
-use Hibla\MysqlClient\Internals\Connection;
-use Hibla\MysqlClient\Internals\ExecuteResult;
-use Hibla\MysqlClient\Internals\PreparedStatement;
-use Hibla\MysqlClient\Internals\QueryResult;
-use Hibla\MysqlClient\Manager\PoolManager;
-use Hibla\MysqlClient\ValueObjects\ConnectionParams;
-use Hibla\MysqlClient\ValueObjects\StreamStats;
+use Hibla\Mysql\Exceptions\ConfigurationException;
+use Hibla\Mysql\Exceptions\NotInitializedException;
+use Hibla\Mysql\Internals\Connection;
+use Hibla\Mysql\Internals\ExecuteResult;
+use Hibla\Mysql\Internals\PreparedStatement;
+use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Manager\PoolManager;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
-use Rcalicdan\Defer\Defer;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -42,16 +41,16 @@ final class MysqlClient
      *        - ConnectionParams object, or
      *        - Array with keys: host, port, user, password, database, or
      *        - DSN string: mysql://user:password@host:port/database
-     * @param int $poolSize Maximum number of connections in the pool
+     * @param int $maxConnections Maximum number of connections in the pool
      *
      * @throws ConfigurationException If configuration is invalid
      */
     public function __construct(
         ConnectionParams|array|string $config,
-        int $poolSize = 10
+        int $maxConnections = 10
     ) {
         try {
-            $this->pool = new PoolManager($config, $poolSize);
+            $this->pool = new PoolManager($config, $maxConnections);
             $this->isInitialized = true;
 
         } catch (\InvalidArgumentException $e) {
@@ -113,7 +112,8 @@ final class MysqlClient
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -121,7 +121,7 @@ final class MysqlClient
      *
      * The query is executed asynchronously. For small to medium result sets,
      * all rows are buffered in memory. For large result sets, use streamQuery().
-     * 
+     *
      * If parameters are provided, the query is automatically prepared as a
      * prepared statement before execution to prevent SQL injection.
      *
@@ -140,25 +140,27 @@ final class MysqlClient
             ->then(function (Connection $conn) use ($sql, $params, &$connection) {
                 $connection = $conn;
 
-                if (empty($params)) {
+                if (\count($params) === 0) {
                     return $conn->query($sql);
                 }
 
                 return $conn->prepare($sql)
                     ->then(function (PreparedStatement $stmt) use ($params) {
                         return $stmt->executeStatement($params);
-                    });
+                    })
+                ;
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
      * Executes a SQL statement (INSERT, UPDATE, DELETE, etc.).
-     * 
+     *
      * If parameters are provided, the statement is automatically prepared as a
      * prepared statement before execution to prevent SQL injection.
      *
@@ -177,20 +179,22 @@ final class MysqlClient
             ->then(function (Connection $conn) use ($sql, $params, &$connection) {
                 $connection = $conn;
 
-                if (empty($params)) {
+                if (\count($params) === 0) {
                     return $conn->execute($sql);
                 }
 
                 return $conn->prepare($sql)
                     ->then(function (PreparedStatement $stmt) use ($params) {
                         return $stmt->executeStatement($params);
-                    });
+                    })
+                ;
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -211,7 +215,8 @@ final class MysqlClient
         return $this->query($sql, $params)
             ->then(function (QueryResult $result) {
                 return $result->fetchOne();
-            });
+            })
+        ;
     }
 
     /**
@@ -237,8 +242,10 @@ final class MysqlClient
                 if ($row === null) {
                     return null;
                 }
+
                 return $row[$column] ?? null;
-            });
+            })
+        ;
     }
 
     /**
@@ -266,13 +273,15 @@ final class MysqlClient
         return $pool->get()
             ->then(function (Connection $conn) use ($sql, $onRow, $onComplete, $onError, &$connection) {
                 $connection = $conn;
+
                 return $conn->streamQuery($sql, $onRow, $onComplete, $onError);
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -330,7 +339,7 @@ final class MysqlClient
      */
     public function close(): void
     {
-        if (!$this->isInitialized) {
+        if (! $this->isInitialized) {
             return;
         }
 
@@ -344,7 +353,7 @@ final class MysqlClient
 
     /**
      * Destructor ensures cleanup on object destruction.
-     * 
+     *
      * Note: While this helps with cleanup, it's better practice to explicitly
      * call close() when you're done with the client to ensure immediate cleanup
      * and proper event loop shutdown.
@@ -365,7 +374,7 @@ final class MysqlClient
      */
     private function getPool(): PoolManager
     {
-        if (!$this->isInitialized || $this->pool === null) {
+        if (! $this->isInitialized || $this->pool === null) {
             throw new NotInitializedException(
                 'MysqlClient instance has not been initialized or has been reset.'
             );

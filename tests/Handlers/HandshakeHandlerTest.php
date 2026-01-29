@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Hibla\EventLoop\Loop;
-use Hibla\MysqlClient\Handlers\HandshakeHandler;
+use Hibla\Mysql\Handlers\HandshakeHandler;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
