@@ -191,16 +191,15 @@ class Transaction
      *
      * @return PromiseInterface<void>
      */
-    public function commit(): PromiseInterface // MODIFIED
+    public function commit(): PromiseInterface 
     {
         $this->ensureActive();
         $this->active = false;
 
         return $this->connection->query('COMMIT')
             ->then(function () {
-                // On successful commit, execute the registered callbacks.
                 $this->executeCallbacks($this->onCommitCallbacks);
-                $this->onRollbackCallbacks = []; // Discard rollback callbacks
+                $this->onRollbackCallbacks = []; 
                 return null;
             })
             ->finally(function () {
@@ -214,16 +213,15 @@ class Transaction
      *
      * @return PromiseInterface<void>
      */
-    public function rollback(): PromiseInterface // MODIFIED
+    public function rollback(): PromiseInterface 
     {
         $this->ensureActive();
         $this->active = false;
 
         return $this->connection->query('ROLLBACK')
             ->then(function () {
-                // On successful rollback, execute the registered callbacks.
                 $this->executeCallbacks($this->onRollbackCallbacks);
-                $this->onCommitCallbacks = []; // Discard commit callbacks
+                $this->onCommitCallbacks = []; 
                 return null;
             })
             ->finally(function () {
