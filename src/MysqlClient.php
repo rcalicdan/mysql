@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql;
 
+use Hibla\Cache\ArrayCache;
 use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
@@ -36,6 +37,15 @@ final class MysqlClient
     /** @var bool Tracks initialization state of this instance */
     private bool $isInitialized = false;
 
+    /** @var \WeakMap<Connection, ArrayCache>|null Statement caches per connection */
+    private ?\WeakMap $statementCaches = null;
+
+    /** @var int Maximum number of prepared statements to cache per connection */
+    private int $statementCacheSize;
+
+    /** @var bool Whether statement caching is enabled */
+    private bool $enableStatementCache;
+
     /**
      * Creates a new independent MysqlClient instance.
      *
@@ -49,6 +59,8 @@ final class MysqlClient
      * @param int $maxConnections Maximum number of connections in the pool (default: 10)
      * @param int $idleTimeout Seconds a connection can remain idle before being closed (default: 60)
      * @param int $maxLifetime Maximum seconds a connection can live before being rotated (default: 3600)
+     * @param int $statementCacheSize Maximum number of prepared statements to cache per connection (default: 256)
+     * @param bool $enableStatementCache Whether to enable prepared statement caching (default: true)
      *
      * @throws ConfigurationException If configuration is invalid
      */
@@ -56,7 +68,9 @@ final class MysqlClient
         ConnectionParams|array|string $config,
         int $maxConnections = 10,
         int $idleTimeout = 60,
-        int $maxLifetime = 3600
+        int $maxLifetime = 3600,
+        int $statementCacheSize = 256,
+        bool $enableStatementCache = true
     ) {
         try {
             $this->pool = new PoolManager(
@@ -65,6 +79,13 @@ final class MysqlClient
                 $idleTimeout,
                 $maxLifetime
             );
+            $this->statementCacheSize = $statementCacheSize;
+            $this->enableStatementCache = $enableStatementCache;
+            
+            if ($this->enableStatementCache) {
+                $this->statementCaches = new \WeakMap();
+            }
+            
             $this->isInitialized = true;
         } catch (\InvalidArgumentException $e) {
             throw new ConfigurationException(
@@ -87,6 +108,7 @@ final class MysqlClient
             $this->pool->close();
         }
         $this->pool = null;
+        $this->statementCaches = null;
         $this->isInitialized = false;
     }
 
@@ -157,6 +179,13 @@ final class MysqlClient
                     return $conn->query($sql);
                 }
 
+                if ($this->enableStatementCache) {
+                    return $this->getCachedStatement($conn, $sql)
+                        ->then(function (PreparedStatement $stmt) use ($params) {
+                            return $stmt->executeStatement($params);
+                        });
+                }
+
                 /** @var PreparedStatement|null $stmtRef */
                 $stmtRef = null;
 
@@ -201,6 +230,13 @@ final class MysqlClient
 
                 if (\count($params) === 0) {
                     return $conn->execute($sql);
+                }
+
+                if ($this->enableStatementCache) {
+                    return $this->getCachedStatement($conn, $sql)
+                        ->then(function (PreparedStatement $stmt) use ($params) {
+                            return $stmt->executeStatement($params);
+                        });
                 }
 
                 /** @var PreparedStatement|null $stmtRef */
@@ -439,12 +475,19 @@ final class MysqlClient
      *                                  - waiting_requests: Requests waiting for connection
      *                                  - max_size: Maximum pool size
      *                                  - config_validated: Whether config was validated
+     *                                  - statement_cache_enabled: Whether statement caching is enabled
+     *                                  - statement_cache_size: Maximum statements per connection
      *
      * @throws NotInitializedException If this instance is not initialized
      */
     public function getStats(): array
     {
-        return $this->getPool()->getStats();
+        $stats = $this->getPool()->getStats();
+        
+        $stats['statement_cache_enabled'] = $this->enableStatementCache;
+        $stats['statement_cache_size'] = $this->statementCacheSize;
+        
+        return $stats;
     }
 
     /**
@@ -460,6 +503,23 @@ final class MysqlClient
     public function getLastConnection(): ?Connection
     {
         return $this->getPool()->getLastConnection();
+    }
+
+    /**
+     * Clears the prepared statement cache for all connections.
+     * 
+     * This is useful for:
+     * - Testing different caching strategies
+     * - Freeing memory when needed
+     * - Forcing re-preparation of statements
+     *
+     * @return void
+     */
+    public function clearStatementCache(): void
+    {
+        if ($this->statementCaches !== null) {
+            $this->statementCaches = new \WeakMap();
+        }
     }
 
     /**
@@ -482,6 +542,7 @@ final class MysqlClient
             $this->pool = null;
         }
 
+        $this->statementCaches = null;
         $this->isInitialized = false;
     }
 
@@ -497,6 +558,47 @@ final class MysqlClient
     public function __destruct()
     {
         $this->close();
+    }
+
+    /**
+     * Gets a prepared statement from cache or creates and caches a new one.
+     *
+     * This method implements the prepared statement caching logic:
+     * 1. Check if statement exists in cache for this connection
+     * 2. If found, return cached statement (cache hit)
+     * 3. If not found, prepare new statement and cache it (cache miss)
+     *
+     * Statements are cached per-connection because prepared statements
+     * are session-scoped in MySQL.
+     *
+     * @param Connection $conn The connection to prepare the statement on
+     * @param string $sql The SQL query with ? placeholders
+     * @return PromiseInterface<PreparedStatement> Promise resolving to prepared statement
+     */
+    private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
+    {
+        // Get or create cache for this connection
+        if (!isset($this->statementCaches[$conn])) {
+            $this->statementCaches[$conn] = new ArrayCache($this->statementCacheSize);
+        }
+
+        $cache = $this->statementCaches[$conn];
+
+        return $cache->get($sql)
+            ->then(function ($stmt) use ($conn, $sql, $cache) {
+                if ($stmt instanceof PreparedStatement) {
+                    // Cache hit - reuse existing prepared statement
+                    return Promise::resolved($stmt);
+                }
+
+                // Cache miss - prepare and cache the statement
+                return $conn->prepare($sql)
+                    ->then(function (PreparedStatement $stmt) use ($sql, $cache) {
+                        // Cache the prepared statement (fire and forget)
+                        $cache->set($sql, $stmt);
+                        return $stmt;
+                    });
+            });
     }
 
     /**
