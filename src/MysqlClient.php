@@ -81,11 +81,11 @@ final class MysqlClient
             );
             $this->statementCacheSize = $statementCacheSize;
             $this->enableStatementCache = $enableStatementCache;
-            
+
             if ($this->enableStatementCache) {
                 $this->statementCaches = new \WeakMap();
             }
-            
+
             $this->isInitialized = true;
         } catch (\InvalidArgumentException $e) {
             throw new ConfigurationException(
@@ -94,61 +94,6 @@ final class MysqlClient
                 $e
             );
         }
-    }
-
-    /**
-     * Resets this instance, closing all connections and clearing state.
-     * After reset, this instance cannot be used until recreated.
-     *
-     * @return void
-     */
-    public function reset(): void
-    {
-        if ($this->pool !== null) {
-            $this->pool->close();
-        }
-        $this->pool = null;
-        $this->statementCaches = null;
-        $this->isInitialized = false;
-    }
-
-    /**
-     * Executes a callback with a connection from this instance's pool.
-     *
-     * Automatically handles connection acquisition and release. The callback
-     * receives a Connection instance and can perform any database operations.
-     * The connection is guaranteed to be released back to the pool even if
-     * the callback throws an exception.
-     *
-     * @template TResult
-     *
-     * @param callable(Connection): (PromiseInterface<TResult>|TResult) $callback Function that receives Connection instance
-     * @return PromiseInterface<TResult> Promise resolving to callback's return value
-     *
-     * @throws NotInitializedException If this instance is not initialized
-     */
-    public function run(callable $callback): PromiseInterface
-    {
-        $pool = $this->getPool();
-        $connection = null;
-
-        return $pool->get()
-            ->then(function (Connection $conn) use ($callback, &$connection) {
-                $connection = $conn;
-                $result = $callback($conn);
-
-                if ($result instanceof PromiseInterface) {
-                    return $result;
-                }
-
-                return Promise::resolved($result);
-            })
-            ->finally(function () use ($pool, &$connection) {
-                if ($connection !== null) {
-                    $pool->release($connection);
-                }
-            })
-        ;
     }
 
     /**
@@ -483,26 +428,11 @@ final class MysqlClient
     public function getStats(): array
     {
         $stats = $this->getPool()->getStats();
-        
+
         $stats['statement_cache_enabled'] = $this->enableStatementCache;
         $stats['statement_cache_size'] = $this->statementCacheSize;
-        
-        return $stats;
-    }
 
-    /**
-     * Gets the most recently used connection from this pool.
-     *
-     * This is primarily useful for debugging and testing purposes.
-     * Returns null if no connection has been used yet.
-     *
-     * @return Connection|null The last connection or null if none used yet
-     *
-     * @throws NotInitializedException If this instance is not initialized
-     */
-    public function getLastConnection(): ?Connection
-    {
-        return $this->getPool()->getLastConnection();
+        return $stats;
     }
 
     /**
@@ -577,7 +507,6 @@ final class MysqlClient
      */
     private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
     {
-        // Get or create cache for this connection
         if (!isset($this->statementCaches[$conn])) {
             $this->statementCaches[$conn] = new ArrayCache($this->statementCacheSize);
         }
