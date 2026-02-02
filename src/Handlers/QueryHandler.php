@@ -73,7 +73,6 @@ final class QueryHandler
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
         $this->rowParser = null;
-        // Streaming setup
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
         $this->streamStartTime = microtime(true);
@@ -201,6 +200,21 @@ final class QueryHandler
         }
 
         $frame = $this->rowParser->parse($reader, $length, $seq);
+
+        if ($frame instanceof ErrPacket) {
+            $errorMsg = new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}");
+            
+            if ($this->streamContext !== null && $this->streamContext->onError !== null) {
+                try {
+                    ($this->streamContext->onError)($errorMsg);
+                } catch (\Throwable $e) {
+                    // Ignore callback error
+                }
+            }
+            
+            $this->currentPromise?->reject($errorMsg);
+            return;
+        }
 
         if ($frame instanceof EofPacket) {
             // Query complete - return appropriate result
