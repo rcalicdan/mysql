@@ -10,6 +10,7 @@ use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\ExecuteResult;
+use Hibla\Mysql\Internals\ManagedPreparedStatement;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Mysql\Internals\QueryResult;
 use Hibla\Mysql\Internals\Transaction;
@@ -94,6 +95,52 @@ final class MysqlClient
                 $e
             );
         }
+    }
+
+    /**
+     * Prepares a SQL statement for multiple executions.
+     *
+     * The prepared statement is automatically managed and will be released
+     * back to the pool when it goes out of scope or when close() is called.
+     *
+     * This is useful when you need to execute the same query multiple times
+     * with different parameters, or when you need fine-grained control over
+     * statement execution and streaming.
+     *
+     * Example:
+     * ```php
+     * $stmt = await($client->prepare('SELECT * FROM users WHERE id = ?'));
+     * $result1 = await($stmt->executeStatement([1]));
+     * $result2 = await($stmt->executeStatement([2]));
+     * await($stmt->close()); // Optional - auto-released when out of scope
+     * ```
+     *
+     * @param string $sql SQL query with ? placeholders
+     * @return PromiseInterface<ManagedPreparedStatement> Promise resolving to managed prepared statement
+     *
+     * @throws NotInitializedException If this instance is not initialized
+     */
+    public function prepare(string $sql): PromiseInterface
+    {
+        $pool = $this->getPool();
+        $connection = null;
+
+        return $pool->get()
+            ->then(function (Connection $conn) use ($sql, $pool, &$connection) {
+                $connection = $conn;
+
+                return $conn->prepare($sql)
+                    ->then(function (PreparedStatement $stmt) use ($conn, $pool) {
+                        return new ManagedPreparedStatement($stmt, $conn, $pool);
+                    });
+            })
+            ->catch(function (\Throwable $e) use ($pool, &$connection) {
+                if ($connection !== null) {
+                    $pool->release($connection);
+                }
+
+                throw $e;
+            });
     }
 
     /**

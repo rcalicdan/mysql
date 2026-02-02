@@ -233,8 +233,18 @@ final class QueryHandler
 
         if ($frame instanceof TextRow) {
             $assocRow = [];
+            $nameCounts = [];
+
             foreach ($frame->values as $index => $value) {
-                $colName = $this->columns[$index] ?? $index;
+                $colName = $this->columns[$index] ?? (string)$index;
+
+                if (isset($nameCounts[$colName])) {
+                    $suffix = $nameCounts[$colName]++;
+                    $colName = $colName . $suffix;
+                } else {
+                    $nameCounts[$colName] = 1;
+                }
+
                 $assocRow[$colName] = $value;
             }
 

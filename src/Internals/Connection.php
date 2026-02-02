@@ -275,7 +275,7 @@ class Connection
             $this->socket = null;
         }
 
-        // Release references to help GC
+        // Release references
         $this->packetReader = null;
         $this->handshakeHandler = null;
         $this->queryHandler = null;
@@ -284,18 +284,23 @@ class Connection
         $this->pingHandler = null;
 
         if ($this->connectPromise) {
-            $this->connectPromise->reject(new RuntimeException('Connection closed by user'));
+            $this->connectPromise->reject(new RuntimeException('Connection closed'));
             $this->connectPromise = null;
         }
 
         if ($this->currentCommand) {
-            $this->currentCommand->promise->reject(new RuntimeException('Connection closed by user'));
+            $this->currentCommand->promise->reject(new RuntimeException('Connection closed'));
             $this->currentCommand = null;
         }
 
-        while (! $this->commandQueue->isEmpty()) {
+        while (!$this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(new RuntimeException('Connection closed by user'));
+
+            if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
+                $cmd->promise->resolve(null);
+            } else {
+                $cmd->promise->reject(new RuntimeException('Connection closed'));
+            }
         }
     }
 
@@ -374,7 +379,7 @@ class Connection
             '',
             [],
             $stmtId
-        );
+        );  
     }
 
     private function enqueueCommand(

@@ -19,6 +19,7 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 /**
@@ -33,6 +34,8 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  */
 final class ExecuteHandler
 {
+    private const UNSIGNED_FLAG = 32;
+
     private ExecuteState $state = ExecuteState::HEADER;
     private int $sequenceId = 0;
     private ?Promise $currentPromise = null;
@@ -42,11 +45,12 @@ final class ExecuteHandler
     private int $streamedRowCount = 0;
     private float $streamStartTime = 0;
 
+    private bool $receivedNewMetadata = false;
+
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
     /**
      * Start a prepared statement execution.
@@ -69,6 +73,7 @@ final class ExecuteHandler
         $this->columnDefinitions = $columnDefinitions;
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
+        $this->receivedNewMetadata = false;
 
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
@@ -157,8 +162,41 @@ final class ExecuteHandler
             return false;
         }
 
-        $reader->readFixedString((int)$firstByte);
-        $reader->readRestOfPacketString();
+        if (!$this->receivedNewMetadata) {
+            $this->columnDefinitions = [];
+            $this->receivedNewMetadata = true;
+        }
+
+        $catalog = $this->readStringGivenLength($reader, (int)$firstByte);
+        $schema = $reader->readLengthEncodedStringOrNull() ?? '';
+        $table = $reader->readLengthEncodedStringOrNull() ?? '';
+        $orgTable = $reader->readLengthEncodedStringOrNull() ?? '';
+        $name = $reader->readLengthEncodedStringOrNull() ?? '';
+        $orgName = $reader->readLengthEncodedStringOrNull() ?? '';
+
+        $reader->readLengthEncodedIntegerOrNull(); 
+
+        $charset = (int)$reader->readFixedInteger(2);
+        $colLength = (int)$reader->readFixedInteger(4);
+        $type = (int)$reader->readFixedInteger(1); 
+        $flags = (int)$reader->readFixedInteger(2);
+        $decimals = (int)$reader->readFixedInteger(1);
+
+        $reader->readRestOfPacketString(); // Filler
+
+        $this->columnDefinitions[] = new ColumnDefinition(
+            $catalog,
+            $schema,
+            $table,
+            $orgTable,
+            $name,
+            $orgName,
+            $charset,
+            $colLength,
+            $type,
+            $flags,
+            $decimals
+        );
 
         return false;
     }
@@ -172,16 +210,13 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
 
-            // Query complete - return appropriate result
             if ($this->streamContext !== null) {
-                // Streaming mode: return statistics
                 $stats = new StreamStats(
                     rowCount: $this->streamedRowCount,
                     columnCount: \count($this->columnDefinitions),
                     duration: microtime(true) - $this->streamStartTime
                 );
 
-                // Notify completion callback
                 if ($this->streamContext->onComplete !== null) {
                     try {
                         ($this->streamContext->onComplete)($stats);
@@ -211,31 +246,43 @@ final class ExecuteHandler
     {
         $columnCount = \count($this->columnDefinitions);
         $nullBitmapBytes = (int) floor(($columnCount + 9) / 8);
+
         $nullBitmap = $reader->readFixedString($nullBitmapBytes);
 
         $values = [];
         foreach ($this->columnDefinitions as $i => $column) {
-            if ($this->isColumnNull($nullBitmap, $i)) {
-                $values[] = null;
+            $isNull = $this->isColumnNull($nullBitmap, $i);
 
+            if ($isNull) {
+                $values[] = null;
                 continue;
             }
-            $values[] = $this->readBinaryValue($reader, $column->type);
+
+            $value = $this->readBinaryValue($reader, $column);
+            $values[] = $value;
         }
 
         $assocRow = [];
+        $nameCounts = [];
+
         foreach ($values as $index => $val) {
             $colName = $this->columnDefinitions[$index]->name;
+
+            if (isset($nameCounts[$colName])) {
+                $suffix = $nameCounts[$colName]++;
+                $colName = $colName . $suffix;
+            } else {
+                $nameCounts[$colName] = 1;
+            }
+
             $assocRow[$colName] = $val;
         }
 
         if ($this->streamContext !== null) {
-            // Streaming mode: deliver row via callback
             try {
                 ($this->streamContext->onRow)($assocRow);
                 $this->streamedRowCount++;
             } catch (\Throwable $e) {
-                // Notify error callback
                 if ($this->streamContext->onError !== null) {
                     ($this->streamContext->onError)($e);
                 }
@@ -263,47 +310,69 @@ final class ExecuteHandler
         return (\ord($nullBitmap[$byteIdx]) & $bit) !== 0;
     }
 
-    /**
-     * Read a binary-encoded value based on MySQL type.
-     *
-     * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html#sect_protocol_binary_resultset_row_value
-     */
-    private function readBinaryValue(PayloadReader $reader, int $type): mixed
+    private function readBinaryValue(PayloadReader $reader, ColumnDefinition $column): mixed
     {
-        return match ($type) {
+        $val = match ($column->type) {
             MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
             MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4),
-            MysqlType::LONGLONG => $reader->readFixedInteger(8),
+            MysqlType::LONGLONG => $this->readSignedLongLong($reader, $column->flags),
             MysqlType::FLOAT => unpack('f', $reader->readFixedString(4))[1],
             MysqlType::DOUBLE => unpack('d', $reader->readFixedString(8))[1],
             MysqlType::DATE,
             MysqlType::DATETIME,
-            MysqlType::TIMESTAMP => $this->readBinaryDateTime($reader, $type),
+            MysqlType::TIMESTAMP => $this->readBinaryDateTime($reader, $column->type),
             MysqlType::TIME => $this->readBinaryTime($reader),
             default => $reader->readLengthEncodedStringOrNull()
         };
+
+        $integerTypes = [
+            MysqlType::TINY,
+            MysqlType::SHORT,
+            MysqlType::YEAR,
+            MysqlType::INT24,
+            MysqlType::LONG,
+        ];
+
+        if (\in_array($column->type, $integerTypes) && is_numeric($val) && !($column->flags & self::UNSIGNED_FLAG)) {
+            $val = (int)$val;
+
+            switch ($column->type) {
+                case MysqlType::TINY:
+                    if ($val >= 128) $val -= 256;
+                    break;
+                case MysqlType::SHORT:
+                case MysqlType::YEAR:
+                    if ($val >= 32768) $val -= 65536;
+                    break;
+                case MysqlType::INT24:
+                    if ($val >= 8388608) $val -= 16777216;
+                    break;
+                case MysqlType::LONG:
+                    if ($val >= 2147483648) $val -= 4294967296;
+                    break;
+            }
+        }
+
+        return $val;
     }
 
     /**
-     * Read binary-encoded DATE, DATETIME, or TIMESTAMP.
-     *
-     * Binary format according to MySQL protocol specification:
-     * - 1 byte: length indicator
-     *   - 0: All fields are zero (zero date: '0000-00-00' or '0000-00-00 00:00:00')
-     *   - 4: Only year, month, day (no time component)
-     *   - 7: Year, month, day, hour, minute, second (no microseconds)
-     *   - 11: Year, month, day, hour, minute, second, microseconds (full precision)
-     * - If length >= 4: 2 bytes year, 1 byte month, 1 byte day
-     * - If length >= 7: 1 byte hour, 1 byte minute, 1 byte second
-     * - If length = 11: 4 bytes microseconds (little-endian)
-     *
-     * @param PayloadReader $reader The payload reader
-     * @param int $type The MySQL type (DATE, DATETIME, or TIMESTAMP)
-     * @return string|null The formatted date/time string or null
-     *
-     * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
+     * Read a signed 64-bit integer (LONGLONG) from the binary stream.
+     * This must handle signed conversion at the byte level to avoid overflow.
      */
+    private function readSignedLongLong(PayloadReader $reader, int $flags): int
+    {
+        $bytes = $reader->readFixedString(8);
+
+        if ($flags & self::UNSIGNED_FLAG) {
+            return unpack('P', $bytes)[1];
+        }
+
+        $result = unpack('q', $bytes)[1];
+        return $result;
+    }
+
     private function readBinaryDateTime(PayloadReader $reader, int $type): ?string
     {
         $length = $reader->readFixedInteger(1);
@@ -334,30 +403,13 @@ final class ExecuteHandler
                 $microseconds = $reader->readFixedInteger(4);
                 $date .= \sprintf('.%06d', $microseconds);
             }
+        } else {
+            $date .= ' 00:00:00';
         }
 
         return $date;
     }
 
-    /**
-     * Read binary-encoded TIME value.
-     *
-     * Binary format according to MySQL protocol specification:
-     * - 1 byte: length indicator (0, 8, or 12)
-     * - If length >= 8:
-     *   - 1 byte: is_negative (1 if minus, 0 for plus)
-     *   - 4 bytes: days
-     *   - 1 byte: hour
-     *   - 1 byte: minute
-     *   - 1 byte: second
-     * - If length = 12:
-     *   - 4 bytes: microseconds
-     *
-     * Note: TIME can represent up to ±838:59:59 (not just 0-23 hours)
-     * This is because TIME can store elapsed time or intervals, not just time-of-day.
-     *
-     * @see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
-     */
     private function readBinaryTime(PayloadReader $reader): ?string
     {
         $length = $reader->readFixedInteger(1);
@@ -396,5 +448,27 @@ final class ExecuteHandler
         $header = substr(pack('V', $len), 0, 3) . \chr($this->sequenceId);
         $this->socket->write($header . $payload);
         $this->sequenceId++;
+    }
+
+    private function readStringGivenLength(PayloadReader $reader, int $firstByte): string
+    {
+        if ($firstByte < 251) {
+            return $reader->readFixedString($firstByte);
+        }
+
+        if ($firstByte === 0xfc) {
+            $len = $reader->readFixedInteger(2);
+            return $reader->readFixedString((int)$len);
+        }
+        if ($firstByte === 0xfd) {
+            $len = $reader->readFixedInteger(3);
+            return $reader->readFixedString((int)$len);
+        }
+        if ($firstByte === 0xfe) {
+            $len = $reader->readFixedInteger(8);
+            return $reader->readFixedString((int)$len);
+        }
+
+        return '';
     }
 }
