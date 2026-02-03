@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Handlers\QueryHandler;
-use Hibla\Mysql\Internals\ExecuteResult;
-use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
@@ -39,7 +38,7 @@ describe('QueryHandler', function () {
         expect(true)->toBeTrue();
     });
 
-    it('resolves promise with ExecuteResult on OK packet', function () {
+    it('resolves promise with Result on OK packet', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -68,7 +67,7 @@ describe('QueryHandler', function () {
         Loop::run();
 
         expect($resolved)->toBeTrue()
-            ->and($result)->toBeInstanceOf(ExecuteResult::class)
+            ->and($result)->toBeInstanceOf(Result::class)
             ->and($result->getAffectedRows())->toBe(1)
             ->and($result->getLastInsertId())->toBe(123);
     });
@@ -163,7 +162,7 @@ describe('QueryHandler', function () {
         Loop::run();
 
         expect($resolved)->toBeTrue()
-            ->and($result)->toBeInstanceOf(QueryResult::class);
+            ->and($result)->toBeInstanceOf(Result::class);
     });
 
     it('handles streaming mode with onRow callback', function () {
@@ -368,6 +367,6 @@ describe('QueryHandler', function () {
 
         Loop::run();
 
-        expect($result)->toBeInstanceOf(QueryResult::class);
+        expect($result)->toBeInstanceOf(Result::class);
     });
 });

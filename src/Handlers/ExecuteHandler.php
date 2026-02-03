@@ -52,15 +52,6 @@ final class ExecuteHandler
     ) {
     }
 
-    /**
-     * Start a prepared statement execution.
-     *
-     * @param int $stmtId Server-side statement ID
-     * @param array $params Parameters to bind
-     * @param array $columnDefinitions Column metadata
-     * @param Promise $promise Promise to resolve with result
-     * @param StreamContext|null $streamContext Optional streaming context
-     */
     public function start(
         int $stmtId,
         array $params,
@@ -100,7 +91,6 @@ final class ExecuteHandler
                 try {
                     ($this->streamContext->onError)($e);
                 } catch (\Throwable $callbackError) {
-                    // Ignore callback errors
                 }
             }
 
@@ -122,20 +112,17 @@ final class ExecuteHandler
 
         if ($frame instanceof ErrPacket) {
             $this->currentPromise?->reject(new \RuntimeException("Execute Error: {$frame->errorMessage}"));
-
             return true;
         }
 
         if ($frame instanceof OkPacket) {
             $result = new ExecuteResult($frame->affectedRows, $frame->lastInsertId, $frame->warnings);
             $this->currentPromise?->resolve($result);
-
             return true;
         }
 
         if ($frame instanceof ResultSetHeader) {
             $this->state = ExecuteState::CHECK_DATA;
-
             return false;
         }
 
@@ -148,7 +135,6 @@ final class ExecuteHandler
 
         if ($firstByte === PacketType::OK) {
             $this->state = ExecuteState::ROWS;
-
             return $this->parseRow($reader);
         }
 
@@ -157,7 +143,6 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
             $this->state = ExecuteState::ROWS;
-
             return false;
         }
 
@@ -167,22 +152,21 @@ final class ExecuteHandler
         }
 
         $catalog = $this->readStringGivenLength($reader, (int)$firstByte);
-
         $schema = $reader->readLengthEncodedStringOrNull() ?? '';
         $table = $reader->readLengthEncodedStringOrNull() ?? '';
         $orgTable = $reader->readLengthEncodedStringOrNull() ?? '';
         $name = $reader->readLengthEncodedStringOrNull() ?? '';
         $orgName = $reader->readLengthEncodedStringOrNull() ?? '';
 
-        $reader->readLengthEncodedIntegerOrNull(); 
+        $reader->readLengthEncodedIntegerOrNull();
 
         $charset = (int)$reader->readFixedInteger(2);
         $colLength = (int)$reader->readFixedInteger(4);
-        $type = (int)$reader->readFixedInteger(1); 
+        $type = (int)$reader->readFixedInteger(1);
         $flags = (int)$reader->readFixedInteger(2);
         $decimals = (int)$reader->readFixedInteger(1);
 
-        $reader->readRestOfPacketString(); // Filler
+        $reader->readRestOfPacketString();
 
         $this->columnDefinitions[] = new ColumnDefinition(
             $catalog,
@@ -210,27 +194,22 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
 
-            // Query complete - return appropriate result
             if ($this->streamContext !== null) {
-                // Streaming mode: return statistics
                 $stats = new StreamStats(
                     rowCount: $this->streamedRowCount,
                     columnCount: \count($this->columnDefinitions),
                     duration: microtime(true) - $this->streamStartTime
                 );
 
-                // Notify completion callback
                 if ($this->streamContext->onComplete !== null) {
                     try {
                         ($this->streamContext->onComplete)($stats);
                     } catch (\Throwable $e) {
-                        // Ignore callback errors
                     }
                 }
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                // Buffered mode: return QueryResult
                 $result = new QueryResult($this->rows);
                 $this->currentPromise?->resolve($result);
             }
@@ -240,8 +219,8 @@ final class ExecuteHandler
 
         if ($firstByte === PacketType::ERR) {
             $errorCode = $reader->readFixedInteger(2);
-            $reader->readFixedString(1); 
-            $reader->readFixedString(5); 
+            $reader->readFixedString(1);
+            $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
             
             $errorMsg = new \RuntimeException("MySQL Error [$errorCode]: $msg");
@@ -250,7 +229,6 @@ final class ExecuteHandler
                 try {
                     ($this->streamContext->onError)($errorMsg);
                 } catch (\Throwable $e) {
-                    // Ignore callback errors
                 }
             }
 
@@ -269,7 +247,6 @@ final class ExecuteHandler
     {
         $columnCount = \count($this->columnDefinitions);
         $nullBitmapBytes = (int) floor(($columnCount + 9) / 8);
-
         $nullBitmap = $reader->readFixedString($nullBitmapBytes);
 
         $values = [];
@@ -301,20 +278,16 @@ final class ExecuteHandler
         }
 
         if ($this->streamContext !== null) {
-            // Streaming mode: deliver row via callback
             try {
                 ($this->streamContext->onRow)($assocRow);
                 $this->streamedRowCount++;
             } catch (\Throwable $e) {
-                // Notify error callback
                 if ($this->streamContext->onError !== null) {
                     ($this->streamContext->onError)($e);
                 }
-
                 throw $e;
             }
         } else {
-            // Buffered mode: collect row
             $this->rows[] = $assocRow;
         }
 
@@ -334,11 +307,13 @@ final class ExecuteHandler
         return (\ord($nullBitmap[$byteIdx]) & $bit) !== 0;
     }
 
-    /**
-     * Read a binary-encoded value based on MySQL type.
-     */
     private function readBinaryValue(PayloadReader $reader, ColumnDefinition $column): mixed
     {
+        // Handle NEWDECIMAL (Type 246) explicitly as string
+        if ($column->type === MysqlType::NEWDECIMAL) {
+            return $reader->readLengthEncodedStringOrNull();
+        }
+
         $val = match ($column->type) {
             MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
@@ -353,29 +328,44 @@ final class ExecuteHandler
             default => $reader->readLengthEncodedStringOrNull()
         };
 
-        if (is_numeric($val) && !($column->flags & self::UNSIGNED_FLAG)) {
-            $val = (int)$val; 
+        // Handle Signed Integers
+        // Only apply to actual integer types. Do NOT cast FLOATS to ints here.
+        if (in_array($column->type, [MysqlType::TINY, MysqlType::SHORT, MysqlType::INT24, MysqlType::LONG, MysqlType::LONGLONG], true) 
+            && !($column->flags & self::UNSIGNED_FLAG)) {
             
             switch ($column->type) {
                 case MysqlType::TINY:
+                    $val = (int)$val;
                     if ($val >= 128) $val -= 256;
                     break;
                 case MysqlType::SHORT:
                 case MysqlType::YEAR:
+                    $val = (int)$val;
                     if ($val >= 32768) $val -= 65536;
                     break;
                 case MysqlType::INT24:
+                    $val = (int)$val;
                     if ($val >= 8388608) $val -= 16777216;
                     break;
                 case MysqlType::LONG:
+                    $val = (int)$val;
                     if ($val >= 2147483648) $val -= 4294967296;
                     break;
                 case MysqlType::LONGLONG:
                     if ($val > 9223372036854775807) {
                         $val = (int)($val - 18446744073709551616);
+                    } else {
+                        $val = (int)$val;
                     }
-
                     break;
+            }
+        }
+
+        // Handle Unsigned LONGLONG
+        if ($column->type === MysqlType::LONGLONG && ($column->flags & self::UNSIGNED_FLAG)) {
+            // If it's a float (exceeds PHP_INT_MAX), convert to string
+            if (is_float($val)) {
+                return number_format($val, 0, '', '');
             }
         }
 
@@ -387,9 +377,10 @@ final class ExecuteHandler
         $length = $reader->readFixedInteger(1);
 
         if ($length === 0) {
-            return $type === MysqlType::DATE
-                ? '0000-00-00'
-                : '0000-00-00 00:00:00';
+            if ($type === MysqlType::DATE) {
+                return '0000-00-00';
+            }
+            return '0000-00-00 00:00:00';
         }
 
         $year = $reader->readFixedInteger(2);
@@ -412,6 +403,9 @@ final class ExecuteHandler
                 $microseconds = $reader->readFixedInteger(4);
                 $date .= \sprintf('.%06d', $microseconds);
             }
+        } else {
+            // Length was 4 (Date only), but type is DATETIME/TIMESTAMP
+            $date .= ' 00:00:00';
         }
 
         return $date;
@@ -457,10 +451,6 @@ final class ExecuteHandler
         $this->sequenceId++;
     }
 
-    /**
-     * Helper to read a string of known length.
-     * Useful when the length byte was already consumed.
-     */
     private function readStringGivenLength(PayloadReader $reader, int $firstByte): string 
     {
         if ($firstByte < 251) {

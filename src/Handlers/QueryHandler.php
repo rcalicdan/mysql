@@ -73,6 +73,7 @@ final class QueryHandler
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
         $this->rowParser = null;
+        // Streaming setup
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
         $this->streamStartTime = microtime(true);
@@ -201,6 +202,7 @@ final class QueryHandler
 
         $frame = $this->rowParser->parse($reader, $length, $seq);
 
+        // FIX: Handle error packet during row fetching
         if ($frame instanceof ErrPacket) {
             $errorMsg = new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}");
             

@@ -6,14 +6,14 @@ namespace Hibla\Mysql\Tests\Handlers;
 
 use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Handlers\ExecuteHandler;
-use Hibla\Mysql\Internals\ExecuteResult;
-use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Mockery;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 describe('ExecuteHandler', function () {
@@ -42,7 +42,7 @@ describe('ExecuteHandler', function () {
         expect(true)->toBeTrue();
     });
 
-    it('resolves promise with ExecuteResult on OK packet', function () {
+    it('resolves promise with Result on OK packet', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -67,7 +67,7 @@ describe('ExecuteHandler', function () {
 
         Loop::run();
 
-        expect($result)->toBeInstanceOf(ExecuteResult::class)
+        expect($result)->toBeInstanceOf(Result::class)
             ->and($result->getAffectedRows())->toBe(1)
             ->and($result->getLastInsertId())->toBe(456);
     });
@@ -105,9 +105,19 @@ describe('ExecuteHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
-        $colDef = new \stdClass();
-        $colDef->name = 'id';
-        $colDef->type = 3;
+        $colDef = new ColumnDefinition(
+            catalog: 'def',
+            schema: 'test_db',
+            table: 'users',
+            orgTable: 'users',
+            name: 'id',
+            orgName: 'id',
+            charset: 63,
+            columnLength: 11,
+            type: 3, // LONG
+            flags: 0,
+            decimals: 0
+        );
 
         $commandBuilder = new CommandBuilder();
         $handler = new ExecuteHandler($socket, $commandBuilder);
@@ -122,13 +132,14 @@ describe('ExecuteHandler', function () {
 
         $okReader = Mockery::mock(PayloadReader::class);
         $okReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x00);
-        $okReader->shouldReceive('readFixedString')->with(1)->andReturn("\0");
-        $okReader->shouldReceive('readFixedInteger')->with(4)->andReturn(100);
+        $okReader->shouldReceive('readFixedString')->with(1)->andReturn("\0"); 
+        $okReader->shouldReceive('readFixedInteger')->with(4)->andReturn(100); 
         $handler->processPacket($okReader, 6, 1);
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $handler->processPacket($eofReader, 1, 2);
+        $eofReader->shouldReceive('readFixedString')->andReturn('');
+        $handler->processPacket($eofReader, 5, 2);
 
         $result = null;
         $promise->then(function ($r) use (&$result) {
@@ -137,7 +148,7 @@ describe('ExecuteHandler', function () {
 
         Loop::run();
 
-        expect($result)->toBeInstanceOf(QueryResult::class)
+        expect($result)->toBeInstanceOf(Result::class)
             ->and($result->count())->toBe(1)
             ->and($result->fetchOne()['id'])->toBe(100);
     });
@@ -146,9 +157,19 @@ describe('ExecuteHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
-        $colDef = new \stdClass();
-        $colDef->name = 'name';
-        $colDef->type = 253;
+        $colDef = new ColumnDefinition(
+            catalog: 'def',
+            schema: 'test_db',
+            table: 'users',
+            orgTable: 'users',
+            name: 'name',
+            orgName: 'name',
+            charset: 33,
+            columnLength: 255,
+            type: 253, 
+            flags: 0,
+            decimals: 0
+        );
 
         $receivedRows = [];
         $streamContext = new StreamContext(
@@ -176,7 +197,8 @@ describe('ExecuteHandler', function () {
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $handler->processPacket($eofReader, 1, 2);
+        $eofReader->shouldReceive('readFixedString')->andReturn('');
+        $handler->processPacket($eofReader, 5, 2);
 
         $stats = null;
         $promise->then(function ($r) use (&$stats) {
