@@ -30,6 +30,7 @@ describe('ExecuteHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once()->andReturnUsing(function ($packet) {
             expect(strlen($packet))->toBeGreaterThan(0);
+
             return true;
         });
 
@@ -69,7 +70,8 @@ describe('ExecuteHandler', function () {
 
         expect($result)->toBeInstanceOf(Result::class)
             ->and($result->getAffectedRows())->toBe(1)
-            ->and($result->getLastInsertId())->toBe(456);
+            ->and($result->getLastInsertId())->toBe(456)
+        ;
     });
 
     it('rejects promise on ERR packet', function () {
@@ -132,8 +134,8 @@ describe('ExecuteHandler', function () {
 
         $okReader = Mockery::mock(PayloadReader::class);
         $okReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x00);
-        $okReader->shouldReceive('readFixedString')->with(1)->andReturn("\0"); 
-        $okReader->shouldReceive('readFixedInteger')->with(4)->andReturn(100); 
+        $okReader->shouldReceive('readFixedString')->with(1)->andReturn("\0");
+        $okReader->shouldReceive('readFixedInteger')->with(4)->andReturn(100);
         $handler->processPacket($okReader, 6, 1);
 
         $eofReader = Mockery::mock(PayloadReader::class);
@@ -150,7 +152,8 @@ describe('ExecuteHandler', function () {
 
         expect($result)->toBeInstanceOf(Result::class)
             ->and($result->count())->toBe(1)
-            ->and($result->fetchOne()['id'])->toBe(100);
+            ->and($result->fetchOne()['id'])->toBe(100)
+        ;
     });
 
     it('handles streaming mode with onRow callback', function () {
@@ -166,7 +169,7 @@ describe('ExecuteHandler', function () {
             orgName: 'name',
             charset: 33,
             columnLength: 255,
-            type: 253, 
+            type: 253,
             flags: 0,
             decimals: 0
         );
@@ -209,7 +212,8 @@ describe('ExecuteHandler', function () {
 
         expect($stats)->toBeInstanceOf(StreamStats::class)
             ->and($stats->rowCount)->toBe(1)
-            ->and($receivedRows[0]['name'])->toBe('Hibla');
+            ->and($receivedRows[0]['name'])->toBe('Hibla')
+        ;
     });
 
     it('triggers onError in streaming mode when parsing fails', function () {

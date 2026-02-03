@@ -26,6 +26,7 @@ describe('QueryHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once()->andReturnUsing(function ($packet) {
             expect(strlen($packet))->toBeGreaterThan(0);
+
             return true;
         });
 
@@ -69,7 +70,8 @@ describe('QueryHandler', function () {
         expect($resolved)->toBeTrue()
             ->and($result)->toBeInstanceOf(Result::class)
             ->and($result->getAffectedRows())->toBe(1)
-            ->and($result->getLastInsertId())->toBe(123);
+            ->and($result->getLastInsertId())->toBe(123)
+        ;
     });
 
     it('rejects promise on ERR packet', function () {
@@ -103,7 +105,8 @@ describe('QueryHandler', function () {
 
         expect($rejected)->toBeTrue()
             ->and($errorMessage)->toContain('MySQL Error')
-            ->and($errorMessage)->toContain('1146');
+            ->and($errorMessage)->toContain('1146')
+        ;
     });
 
     it('handles result set with columns and rows in buffered mode', function () {
@@ -162,7 +165,8 @@ describe('QueryHandler', function () {
         Loop::run();
 
         expect($resolved)->toBeTrue()
-            ->and($result)->toBeInstanceOf(Result::class);
+            ->and($result)->toBeInstanceOf(Result::class)
+        ;
     });
 
     it('handles streaming mode with onRow callback', function () {
@@ -222,7 +226,8 @@ describe('QueryHandler', function () {
         expect($resolved)->toBeTrue()
             ->and($result)->toBeInstanceOf(StreamStats::class)
             ->and($result->rowCount)->toBe(1)
-            ->and($receivedRows)->toHaveCount(1);
+            ->and($receivedRows)->toHaveCount(1)
+        ;
     });
 
     it('calls onComplete callback in streaming mode', function () {
@@ -275,9 +280,9 @@ describe('QueryHandler', function () {
         $errorCalled = false;
         $streamContext = new StreamContext(
             onRow: function (array $row) {
-                throw new \RuntimeException('Row processing error');
+                throw new RuntimeException('Row processing error');
             },
-            onError: function (\Throwable $e) use (&$errorCalled) {
+            onError: function (Throwable $e) use (&$errorCalled) {
                 $errorCalled = true;
                 expect($e->getMessage())->toContain('Row processing error');
             }
@@ -285,7 +290,7 @@ describe('QueryHandler', function () {
 
         $handler->start('SELECT 1', $promise, $streamContext);
 
-        $promise->catch(function (\Throwable $e) {
+        $promise->catch(function (Throwable $e) {
         });
 
         $headerReader = Mockery::mock(PayloadReader::class);
@@ -305,7 +310,7 @@ describe('QueryHandler', function () {
 
         try {
             $handler->processPacket($rowReader, 5, 3);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
         }
 
         Loop::run();

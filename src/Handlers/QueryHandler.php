@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\ParserState;
-use Hibla\Mysql\Internals\ExecuteResult;
-use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
+use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\EofPacket;
@@ -28,7 +28,7 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  * Handles text protocol query execution (COM_QUERY).
  *
  * Supports both buffered and streaming modes:
- * - Buffered: All rows loaded into QueryResult
+ * - Buffered: All rows loaded into Result object
  * - Streaming: Rows delivered via callback with StreamStats result
  *
  * @internal
@@ -36,18 +36,21 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  */
 final class QueryHandler
 {
-    private ParserState $state = ParserState::INIT;
-    private int $columnCount = 0;
     private array $columns = [];
     private array $rows = [];
-    private ?Promise $currentPromise = null;
+    private int $columnCount = 0;
     private int $sequenceId = 0;
-    private readonly ResponseParser $responseParser;
-    private readonly ColumnDefinitionParser $columnParser;
-    private ?RowOrEofParser $rowParser = null;
-    private ?StreamContext $streamContext = null;
     private int $streamedRowCount = 0;
     private float $streamStartTime = 0;
+    private bool $isDraining = false;
+    private readonly ResponseParser $responseParser;
+    private readonly ColumnDefinitionParser $columnParser;
+    private ParserState $state = ParserState::INIT;
+    private ?RowOrEofParser $rowParser = null;
+    private ?StreamContext $streamContext = null;
+    private ?Promise $currentPromise = null;
+    private ?Result $primaryResult = null;
+    private ?StreamStats $primaryStreamStats = null;
 
     public function __construct(
         private readonly SocketConnection $socket,
@@ -57,13 +60,6 @@ final class QueryHandler
         $this->columnParser = new ColumnDefinitionParser();
     }
 
-    /**
-     * Start a query operation.
-     *
-     * @param string $sql The SQL query to execute
-     * @param Promise $promise Promise to resolve with result
-     * @param StreamContext|null $streamContext Optional streaming context for memory-efficient processing
-     */
     public function start(string $sql, Promise $promise, ?StreamContext $streamContext = null): void
     {
         $this->state = ParserState::INIT;
@@ -73,10 +69,12 @@ final class QueryHandler
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
         $this->rowParser = null;
-        // Streaming setup
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
         $this->streamStartTime = microtime(true);
+        $this->primaryResult = null;
+        $this->primaryStreamStats = null;
+        $this->isDraining = false;
 
         $packet = $this->commandBuilder->buildQuery($sql);
         $this->writePacket($packet);
@@ -95,22 +93,18 @@ final class QueryHandler
         } catch (IncompleteBufferException $e) {
             throw $e;
         } catch (\Throwable $e) {
-            // Notify stream error callback if streaming
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
                 try {
                     ($this->streamContext->onError)($e);
                 } catch (\Throwable $callbackError) {
-                    // Ignore callback errors
                 }
             }
 
             $this->currentPromise?->reject($e);
 
-            // Drain to avoid loop
             try {
                 $reader->readRestOfPacketString();
             } catch (\Throwable $t) {
-                // Ignore
             }
         }
     }
@@ -123,31 +117,53 @@ final class QueryHandler
             $this->currentPromise?->reject(
                 new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}")
             );
-
             return;
         }
 
         if ($frame instanceof OkPacket) {
-            // For execute() operations
-            $result = new ExecuteResult(
+            $result = new Result(
+                rows: [],
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
-                warningCount: $frame->warningCount ?? 0
+                warningCount: $frame->warnings
             );
-            $this->currentPromise?->resolve($result);
 
+            if ($this->hasMoreResults($frame->statusFlags)) {
+                $this->prepareDrain($result, null);
+                return;
+            }
+
+            $finalResult = $this->primaryResult ?? $result;
+            $this->currentPromise?->resolve($finalResult);
             return;
         }
 
         if ($frame instanceof ResultSetHeader) {
-            // For query() operations
             $this->columnCount = $frame->columnCount;
             $this->state = ParserState::COLUMNS;
-
             return;
         }
 
         throw new \RuntimeException('Unexpected packet type in header state');
+    }
+
+    private function hasMoreResults(int $flags): bool
+    {
+        return ($flags & StatusFlags::SERVER_MORE_RESULTS_EXISTS) !== 0;
+    }
+
+    private function prepareDrain(?Result $result, ?StreamStats $stats): void
+    {
+        if (!$this->isDraining) {
+            $this->primaryResult = $result;
+            $this->primaryStreamStats = $stats;
+            $this->isDraining = true;
+        }
+
+        $this->state = ParserState::INIT;
+        $this->columnCount = 0;
+        $this->columns = [];
+        $this->rows = [];
     }
 
     private function handleColumn(PayloadReader $reader, int $length, int $seq): void
@@ -160,23 +176,155 @@ final class QueryHandler
             }
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
+            return;
+        }
 
+        if ($this->isDraining) {
+            $reader->readRestOfPacketString();
             return;
         }
 
         $this->readLengthEncodedStringWithFirstByte($reader, (int)$firstByte);
-
         $reader->readLengthEncodedStringOrNull();
-
         $reader->readLengthEncodedStringOrNull();
-
         $reader->readLengthEncodedStringOrNull();
-
         $name = $reader->readLengthEncodedStringOrNull();
-
         $reader->readRestOfPacketString();
 
         $this->columns[] = $name ?? 'unknown';
+    }
+
+    private function handleRow(PayloadReader $reader, int $length, int $seq): void
+    {
+        if ($this->rowParser === null) {
+            throw new \RuntimeException('Row parser not initialized');
+        }
+
+        $frame = $this->rowParser->parse($reader, $length, $seq);
+
+        if ($frame instanceof ErrPacket) {
+            $this->handleRowError($frame);
+            return;
+        }
+
+        if ($frame instanceof EofPacket) {
+            $this->handleEndOfResultSet($frame);
+            return;
+        }
+
+        if ($frame instanceof TextRow) {
+            $this->handleTextRow($frame);
+        }
+    }
+
+    private function handleRowError(ErrPacket $packet): void
+    {
+        $exception = new \RuntimeException(
+            "MySQL Error [{$packet->errorCode}]: {$packet->errorMessage}"
+        );
+
+        if ($this->streamContext?->onError !== null) {
+            try {
+                ($this->streamContext->onError)($exception);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        $this->currentPromise?->reject($exception);
+    }
+
+    private function handleEndOfResultSet(EofPacket $packet): void
+    {
+        if ($this->streamContext !== null) {
+            $stats = new StreamStats(
+                rowCount: $this->streamedRowCount,
+                columnCount: \count($this->columns),
+                duration: microtime(true) - $this->streamStartTime,
+                warningCount: $packet->warnings
+            );
+            $currentResult = null;
+            $currentStats = $stats;
+        } else {
+            $result = new Result(
+                rows: $this->rows,
+                affectedRows: 0,
+                lastInsertId: 0,
+                warningCount: $packet->warnings,
+                columns: $this->columns
+            );
+            $currentResult = $result;
+            $currentStats = null;
+        }
+
+        if ($this->hasMoreResults($packet->statusFlags)) {
+            $this->prepareDrain($currentResult, $currentStats);
+            return;
+        }
+
+        if ($this->streamContext !== null) {
+            $finalStats = $this->primaryStreamStats ?? $currentStats;
+            if ($this->streamContext->onComplete !== null) {
+                try {
+                    ($this->streamContext->onComplete)($finalStats);
+                } catch (\Throwable $e) {
+                }
+            }
+            $this->currentPromise?->resolve($finalStats);
+        } else {
+            $finalResult = $this->primaryResult ?? $currentResult;
+            $this->currentPromise?->resolve($finalResult);
+        }
+    }
+
+    private function handleTextRow(TextRow $row): void
+    {
+        if ($this->isDraining) {
+            return;
+        }
+
+        $assocRow = $this->convertRowToAssociativeArray($row);
+
+        if ($this->streamContext !== null) {
+            $this->processStreamingRow($assocRow);
+        } else {
+            $this->rows[] = $assocRow;
+        }
+    }
+
+
+    private function convertRowToAssociativeArray(TextRow $row): array
+    {
+        $assocRow = [];
+        $nameCounts = [];
+
+        foreach ($row->values as $index => $value) {
+            $colName = $this->columns[$index] ?? (string)$index;
+
+            if (isset($nameCounts[$colName])) {
+                $suffix = $nameCounts[$colName]++;
+                $colName .= $suffix;
+            } else {
+                $nameCounts[$colName] = 1;
+            }
+
+            $assocRow[$colName] = $value;
+        }
+
+        return $assocRow;
+    }
+
+    private function processStreamingRow(array $row): void
+    {
+        try {
+            ($this->streamContext->onRow)($row);
+            $this->streamedRowCount++;
+        } catch (\Throwable $e) {
+            if ($this->streamContext->onError !== null) {
+                ($this->streamContext->onError)($e);
+            }
+
+            throw $e;
+        }
     }
 
     private function readLengthEncodedStringWithFirstByte(PayloadReader $reader, int $firstByte): ?string
@@ -192,96 +340,6 @@ final class QueryHandler
                     \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte)
                 ),
         };
-    }
-
-    private function handleRow(PayloadReader $reader, int $length, int $seq): void
-    {
-        if ($this->rowParser === null) {
-            throw new \RuntimeException('Row parser not initialized');
-        }
-
-        $frame = $this->rowParser->parse($reader, $length, $seq);
-
-        // FIX: Handle error packet during row fetching
-        if ($frame instanceof ErrPacket) {
-            $errorMsg = new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}");
-            
-            if ($this->streamContext !== null && $this->streamContext->onError !== null) {
-                try {
-                    ($this->streamContext->onError)($errorMsg);
-                } catch (\Throwable $e) {
-                    // Ignore callback error
-                }
-            }
-            
-            $this->currentPromise?->reject($errorMsg);
-            return;
-        }
-
-        if ($frame instanceof EofPacket) {
-            // Query complete - return appropriate result
-            if ($this->streamContext !== null) {
-                // Streaming mode: return statistics
-                $stats = new StreamStats(
-                    rowCount: $this->streamedRowCount,
-                    columnCount: \count($this->columns),
-                    duration: microtime(true) - $this->streamStartTime
-                );
-
-                // Notify completion callback
-                if ($this->streamContext->onComplete !== null) {
-                    try {
-                        ($this->streamContext->onComplete)($stats);
-                    } catch (\Throwable $e) {
-                        // Ignore callback errors
-                    }
-                }
-
-                $this->currentPromise?->resolve($stats);
-            } else {
-                // Buffered mode: return QueryResult
-                $result = new QueryResult($this->rows);
-                $this->currentPromise?->resolve($result);
-            }
-
-            return;
-        }
-
-        if ($frame instanceof TextRow) {
-            $assocRow = [];
-            $nameCounts = [];
-
-            foreach ($frame->values as $index => $value) {
-                $colName = $this->columns[$index] ?? (string)$index;
-
-                if (isset($nameCounts[$colName])) {
-                    $suffix = $nameCounts[$colName]++;
-                    $colName = $colName . $suffix;
-                } else {
-                    $nameCounts[$colName] = 1;
-                }
-
-                $assocRow[$colName] = $value;
-            }
-
-            if ($this->streamContext !== null) {
-                // Streaming mode: deliver row via callback
-                try {
-                    ($this->streamContext->onRow)($assocRow);
-                    $this->streamedRowCount++;
-                } catch (\Throwable $e) {
-                    // Notify error callback
-                    if ($this->streamContext->onError !== null) {
-                        ($this->streamContext->onError)($e);
-                    }
-
-                    throw $e;
-                }
-            } else {
-                // Buffered mode: collect row
-                $this->rows[] = $assocRow;
-            }
-        }
     }
 
     private function writePacket(string $payload): void

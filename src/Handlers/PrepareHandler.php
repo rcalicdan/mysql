@@ -16,23 +16,20 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 final class PrepareHandler
 {
-    private PrepareState $state = PrepareState::HEADER;
+    private array $columnDefinitions = [];
+    private array $paramDefinitions = [];
     private int $sequenceId = 0;
-    private ?Promise $currentPromise = null;
-
     private int $stmtId = 0;
     private int $numColumns = 0;
     private int $numParams = 0;
-
-    private array $columnDefinitions = [];
-    private array $paramDefinitions = [];
+    private PrepareState $state = PrepareState::HEADER;
+    private ?Promise $currentPromise = null;
 
     public function __construct(
         private readonly MysqlConnection $connection,
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
     public function start(string $sql, Promise $promise): void
     {

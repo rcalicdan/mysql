@@ -4,24 +4,24 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql;
 
+use function Hibla\async;
+use function Hibla\await;
+
 use Hibla\Cache\ArrayCache;
 use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
 use Hibla\Mysql\Internals\Connection;
-use Hibla\Mysql\Internals\ExecuteResult;
 use Hibla\Mysql\Internals\ManagedPreparedStatement;
 use Hibla\Mysql\Internals\PreparedStatement;
-use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\Internals\Transaction;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Mysql\ValueObjects\StreamStats;
+
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
-
-use function Hibla\async;
-use function Hibla\await;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -132,7 +132,8 @@ final class MysqlClient
                 return $conn->prepare($sql)
                     ->then(function (PreparedStatement $stmt) use ($conn, $pool) {
                         return new ManagedPreparedStatement($stmt, $conn, $pool);
-                    });
+                    })
+                ;
             })
             ->catch(function (\Throwable $e) use ($pool, &$connection) {
                 if ($connection !== null) {
@@ -140,7 +141,8 @@ final class MysqlClient
                 }
 
                 throw $e;
-            });
+            })
+        ;
     }
 
     /**
@@ -154,7 +156,7 @@ final class MysqlClient
      *
      * @param string $sql SQL query to execute with optional ? placeholders
      * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<QueryResult> Promise resolving to query result
+     * @return PromiseInterface<Result> Promise resolving to query result
      *
      * @throws NotInitializedException If this instance is not initialized
      */
@@ -175,7 +177,8 @@ final class MysqlClient
                     return $this->getCachedStatement($conn, $sql)
                         ->then(function (PreparedStatement $stmt) use ($params) {
                             return $stmt->executeStatement($params);
-                        });
+                        })
+                    ;
                 }
 
                 /** @var PreparedStatement|null $stmtRef */
@@ -184,19 +187,22 @@ final class MysqlClient
                 return $conn->prepare($sql)
                     ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                         $stmtRef = $stmt;
+
                         return $stmt->executeStatement($params);
                     })
                     ->finally(function () use (&$stmtRef) {
                         if ($stmtRef !== null) {
                             return $stmtRef->close();
                         }
-                    });
+                    })
+                ;
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -207,7 +213,7 @@ final class MysqlClient
      *
      * @param string $sql SQL statement to execute with optional ? placeholders
      * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<ExecuteResult> Promise resolving to execution result
+     * @return PromiseInterface<Result> Promise resolving to execution result
      *
      * @throws NotInitializedException If this instance is not initialized
      */
@@ -221,14 +227,15 @@ final class MysqlClient
                 $connection = $conn;
 
                 if (\count($params) === 0) {
-                    return $conn->execute($sql);
+                    return $conn->query($sql);
                 }
 
                 if ($this->enableStatementCache) {
                     return $this->getCachedStatement($conn, $sql)
                         ->then(function (PreparedStatement $stmt) use ($params) {
                             return $stmt->executeStatement($params);
-                        });
+                        })
+                    ;
                 }
 
                 /** @var PreparedStatement|null $stmtRef */
@@ -237,19 +244,22 @@ final class MysqlClient
                 return $conn->prepare($sql)
                     ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                         $stmtRef = $stmt;
+
                         return $stmt->executeStatement($params);
                     })
                     ->finally(function () use (&$stmtRef) {
                         if ($stmtRef !== null) {
                             return $stmtRef->close();
                         }
-                    });
+                    })
+                ;
             })
             ->finally(function () use ($pool, &$connection) {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -268,7 +278,7 @@ final class MysqlClient
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function (QueryResult $result) {
+            ->then(function (Result $result) {
                 return $result->fetchOne();
             })
         ;
@@ -292,7 +302,7 @@ final class MysqlClient
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function (QueryResult $result) use ($column) {
+            ->then(function (Result $result) use ($column) {
                 $row = $result->fetchOne();
                 if ($row === null) {
                     return null;
@@ -351,7 +361,7 @@ final class MysqlClient
      * Example:
      * ```php
      * $tx = await($client->beginTransaction());
-     * await($tx->execute('INSERT INTO users (name) VALUES (?)', ['Alice']));
+     * await($tx->query('INSERT INTO users (name) VALUES (?)', ['Alice']));
      * await($tx->commit());
      * ```
      *
@@ -380,7 +390,8 @@ final class MysqlClient
                 }
 
                 throw $e;
-            });
+            })
+        ;
     }
 
     /**
@@ -392,9 +403,9 @@ final class MysqlClient
      *
      * @template TResult
      *
-     * @param callable(Transaction): (PromiseInterface<TResult>|TResult) $callback 
+     * @param callable(Transaction): (PromiseInterface<TResult>|TResult) $callback
      * @param int $attempts Number of times to attempt the transaction (default: 1)
-     * @param IsolationLevel|null $isolationLevel 
+     * @param IsolationLevel|null $isolationLevel
      * @return PromiseInterface<TResult>
      *
      * @throws NotInitializedException
@@ -406,7 +417,7 @@ final class MysqlClient
         ?IsolationLevel $isolationLevel = null
     ): PromiseInterface {
         if ($attempts < 1) {
-            throw new \InvalidArgumentException("Attempts must be at least 1");
+            throw new \InvalidArgumentException('Attempts must be at least 1');
         }
 
         return async(function () use ($callback, $attempts, $isolationLevel) {
@@ -419,7 +430,7 @@ final class MysqlClient
                     /** @var Transaction $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn() => $callback($tx)));
+                    $result = await(async(fn () => $callback($tx)));
 
                     await($tx->commit());
 
@@ -484,7 +495,7 @@ final class MysqlClient
 
     /**
      * Clears the prepared statement cache for all connections.
-     * 
+     *
      * This is useful for:
      * - Testing different caching strategies
      * - Freeing memory when needed
@@ -554,7 +565,7 @@ final class MysqlClient
      */
     private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
     {
-        if (!isset($this->statementCaches[$conn])) {
+        if (! isset($this->statementCaches[$conn])) {
             $this->statementCaches[$conn] = new ArrayCache($this->statementCacheSize);
         }
 
@@ -572,9 +583,12 @@ final class MysqlClient
                     ->then(function (PreparedStatement $stmt) use ($sql, $cache) {
                         // Cache the prepared statement (fire and forget)
                         $cache->set($sql, $stmt);
+
                         return $stmt;
-                    });
-            });
+                    })
+                ;
+            })
+        ;
     }
 
     /**

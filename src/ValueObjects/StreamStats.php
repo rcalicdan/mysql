@@ -12,19 +12,14 @@ namespace Hibla\Mysql\ValueObjects;
  *
  * @package Hibla\Mysql\ValueObjects
  */
-final class StreamStats
+class StreamStats
 {
-    /**
-     * @param int $rowCount Total number of rows streamed
-     * @param int $columnCount Number of columns in the result set
-     * @param float $duration Duration of the stream operation in seconds
-     */
     public function __construct(
         public readonly int $rowCount,
         public readonly int $columnCount,
         public readonly float $duration,
-    ) {
-    }
+        public readonly int $warningCount = 0
+    ) {}
 
     /**
      * Get the average rows per second.

@@ -122,10 +122,10 @@ class PoolManager
 
         $this->configValidated = true;
         $this->maxSize = $maxSize;
-        
+
         $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
         $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
-        
+
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
     }
@@ -145,35 +145,38 @@ class PoolManager
         while (! $this->pool->isEmpty()) {
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
-            
+
             $connId = spl_object_id($connection);
             $now = hrtime(true);
-            
+
             $lastUsed = $this->connectionLastUsed[$connId] ?? 0;
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
 
             // 1. Check Idle Timeout
             if (($now - $lastUsed) > $this->idleTimeoutNanos) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
             // 2. Check Max Lifetime
             if (($now - $createdAt) > $this->maxLifetimeNanos) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
             // 3. Check Connection Health (TCP State)
             if (! $connection->isReady() || $connection->isClosed()) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
             // Valid Connection Found!
             // Remove from idle tracking (it's active now)
             unset($this->connectionLastUsed[$connId]);
-            
+
             // Resume the connection (re-attach event loop listeners)
             $connection->resume();
             $this->lastConnection = $connection;
@@ -251,6 +254,7 @@ class PoolManager
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
             if (($now - $createdAt) > $this->maxLifetimeNanos) {
                 $this->removeConnection($connection);
+
                 return;
             }
 
@@ -259,16 +263,6 @@ class PoolManager
 
             $this->pool->enqueue($connection);
         }
-    }
-
-    /**
-     * Gets the most recently active connection handled by the pool.
-     *
-     * @return MysqlConnection|null The last connection object or null if none have been handled.
-     */
-    public function getLastConnection(): ?MysqlConnection
-    {
-        return $this->lastConnection;
     }
 
     /**
@@ -310,7 +304,7 @@ class PoolManager
         $this->waiters = new SplQueue();
         $this->activeConnections = 0;
         $this->lastConnection = null;
-    
+
         $this->connectionLastUsed = [];
         $this->connectionCreatedAt = [];
     }
@@ -345,17 +339,18 @@ class PoolManager
                     function () use ($connection, $tempQueue, &$stats) {
                         $stats['healthy']++;
                         $connection->pause();
-                        
+
                         $connId = spl_object_id($connection);
                         $this->connectionLastUsed[$connId] = hrtime(true);
-                        
+
                         $tempQueue->enqueue($connection);
                     },
                     function () use ($connection, &$stats) {
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                );
+                )
+            ;
         }
 
         // Wait for all pings to complete
@@ -392,11 +387,11 @@ class PoolManager
         if (! $connection->isClosed()) {
             $connection->close();
         }
-        
+
         $connId = spl_object_id($connection);
         unset($this->connectionLastUsed[$connId]);
         unset($this->connectionCreatedAt[$connId]);
-        
+
         $this->activeConnections--;
     }
 
@@ -408,7 +403,7 @@ class PoolManager
     private function createConnectionForWaiter(): void
     {
         $this->activeConnections++;
-        
+
         /** @var Promise<MysqlConnection> $promise */
         $promise = $this->waiters->dequeue();
 

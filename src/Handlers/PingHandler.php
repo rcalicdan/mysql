@@ -13,13 +13,12 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 final class PingHandler
 {
-    private ?Promise $currentPromise = null;
     private int $sequenceId = 0;
+    private ?Promise $currentPromise = null;
 
     public function __construct(
         private readonly SocketConnection $socket
-    ) {
-    }
+    ) {}
 
     public function start(Promise $promise): void
     {

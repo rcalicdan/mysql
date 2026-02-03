@@ -49,7 +49,7 @@ class PreparedStatement
      * All result rows are loaded into memory. Use executeStream() for large result sets.
      *
      * @param array<int, mixed> $params The parameters to bind to the statement.
-     * @return PromiseInterface<ExecuteResult|QueryResult>
+     * @return PromiseInterface<Result>
      * @throws \RuntimeException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */

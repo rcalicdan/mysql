@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\ExecuteState;
-use Hibla\Mysql\Internals\ExecuteResult;
-use Hibla\Mysql\Internals\QueryResult;
+use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Rcalicdan\MySQLBinaryProtocol\Constants\ColumnFlags;
+use Rcalicdan\MySQLBinaryProtocol\Constants\DataTypeBounds;
+use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\MysqlType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\PacketType;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
@@ -26,7 +28,7 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  * Handles binary protocol prepared statement execution (COM_STMT_EXECUTE).
  *
  * Supports both buffered and streaming modes:
- * - Buffered: All rows loaded into QueryResult
+ * - Buffered: All rows loaded into Result object
  * - Streaming: Rows delivered via callback with StreamStats result
  *
  * @internal
@@ -34,23 +36,20 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  */
 final class ExecuteHandler
 {
-    private const UNSIGNED_FLAG = 32;
-
-    private ExecuteState $state = ExecuteState::HEADER;
-    private int $sequenceId = 0;
-    private ?Promise $currentPromise = null;
     private array $rows = [];
     private array $columnDefinitions = [];
-    private ?StreamContext $streamContext = null;
+    private int $sequenceId = 0;
     private int $streamedRowCount = 0;
     private float $streamStartTime = 0;
     private bool $receivedNewMetadata = false;
+    private ExecuteState $state = ExecuteState::HEADER;
+    private ?StreamContext $streamContext = null;
+    private ?Promise $currentPromise = null;
 
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
     public function start(
         int $stmtId,
@@ -112,17 +111,25 @@ final class ExecuteHandler
 
         if ($frame instanceof ErrPacket) {
             $this->currentPromise?->reject(new \RuntimeException("Execute Error: {$frame->errorMessage}"));
+
             return true;
         }
 
         if ($frame instanceof OkPacket) {
-            $result = new ExecuteResult($frame->affectedRows, $frame->lastInsertId, $frame->warnings);
+            $result = new Result(
+                rows: [],
+                affectedRows: $frame->affectedRows,
+                lastInsertId: $frame->lastInsertId,
+                warningCount: $frame->warnings
+            );
             $this->currentPromise?->resolve($result);
+
             return true;
         }
 
         if ($frame instanceof ResultSetHeader) {
             $this->state = ExecuteState::CHECK_DATA;
+
             return false;
         }
 
@@ -135,6 +142,7 @@ final class ExecuteHandler
 
         if ($firstByte === PacketType::OK) {
             $this->state = ExecuteState::ROWS;
+
             return $this->parseRow($reader);
         }
 
@@ -143,10 +151,11 @@ final class ExecuteHandler
                 $reader->readFixedString($length - 1);
             }
             $this->state = ExecuteState::ROWS;
+
             return false;
         }
 
-        if (!$this->receivedNewMetadata) {
+        if (! $this->receivedNewMetadata) {
             $this->columnDefinitions = [];
             $this->receivedNewMetadata = true;
         }
@@ -210,7 +219,14 @@ final class ExecuteHandler
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $result = new QueryResult($this->rows);
+                $columns = array_map(fn($c) => $c->name, $this->columnDefinitions);
+                $result = new Result(
+                    rows: $this->rows,
+                    affectedRows: 0,
+                    lastInsertId: 0,
+                    warningCount: 0,
+                    columns: $columns
+                );
                 $this->currentPromise?->resolve($result);
             }
 
@@ -222,7 +238,7 @@ final class ExecuteHandler
             $reader->readFixedString(1);
             $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
-            
+
             $errorMsg = new \RuntimeException("MySQL Error [$errorCode]: $msg");
 
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
@@ -233,6 +249,7 @@ final class ExecuteHandler
             }
 
             $this->currentPromise?->reject($errorMsg);
+
             return true;
         }
 
@@ -255,6 +272,7 @@ final class ExecuteHandler
 
             if ($isNull) {
                 $values[] = null;
+
                 continue;
             }
 
@@ -269,11 +287,11 @@ final class ExecuteHandler
 
             if (isset($nameCounts[$colName])) {
                 $suffix = $nameCounts[$colName]++;
-                $colName = $colName . $suffix;
+                $colName .= $suffix;
             } else {
                 $nameCounts[$colName] = 1;
             }
-            
+
             $assocRow[$colName] = $val;
         }
 
@@ -285,6 +303,7 @@ final class ExecuteHandler
                 if ($this->streamContext->onError !== null) {
                     ($this->streamContext->onError)($e);
                 }
+
                 throw $e;
             }
         } else {
@@ -309,16 +328,18 @@ final class ExecuteHandler
 
     private function readBinaryValue(PayloadReader $reader, ColumnDefinition $column): mixed
     {
-        // Handle NEWDECIMAL (Type 246) explicitly as string
         if ($column->type === MysqlType::NEWDECIMAL) {
             return $reader->readLengthEncodedStringOrNull();
+        }
+
+        if ($column->type === MysqlType::LONGLONG) {
+            return $this->readLongLong($reader, $column);
         }
 
         $val = match ($column->type) {
             MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
             MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4),
-            MysqlType::LONGLONG => $reader->readFixedInteger(8),
             MysqlType::FLOAT => unpack('f', $reader->readFixedString(4))[1],
             MysqlType::DOUBLE => unpack('d', $reader->readFixedString(8))[1],
             MysqlType::DATE,
@@ -328,48 +349,54 @@ final class ExecuteHandler
             default => $reader->readLengthEncodedStringOrNull()
         };
 
-        // Handle Signed Integers
-        // Only apply to actual integer types. Do NOT cast FLOATS to ints here.
-        if (in_array($column->type, [MysqlType::TINY, MysqlType::SHORT, MysqlType::INT24, MysqlType::LONG, MysqlType::LONGLONG], true) 
-            && !($column->flags & self::UNSIGNED_FLAG)) {
-            
+        if (
+            \in_array($column->type, [MysqlType::TINY, MysqlType::SHORT, MysqlType::INT24, MysqlType::LONG], true)
+            && ! ($column->flags & ColumnFlags::UNSIGNED_FLAG)
+        ) {
+
+            $val = (int)$val;
             switch ($column->type) {
                 case MysqlType::TINY:
-                    $val = (int)$val;
-                    if ($val >= 128) $val -= 256;
+                    if ($val >= DataTypeBounds::TINYINT_SIGN_BIT) {
+                        $val -= DataTypeBounds::TINYINT_RANGE;
+                    }
                     break;
                 case MysqlType::SHORT:
                 case MysqlType::YEAR:
-                    $val = (int)$val;
-                    if ($val >= 32768) $val -= 65536;
+                    if ($val >= DataTypeBounds::SMALLINT_SIGN_BIT) {
+                        $val -= DataTypeBounds::SMALLINT_RANGE;
+                    }
                     break;
                 case MysqlType::INT24:
-                    $val = (int)$val;
-                    if ($val >= 8388608) $val -= 16777216;
+                    if ($val >= DataTypeBounds::MEDIUMINT_SIGN_BIT) {
+                        $val -= DataTypeBounds::MEDIUMINT_RANGE;
+                    }
                     break;
                 case MysqlType::LONG:
-                    $val = (int)$val;
-                    if ($val >= 2147483648) $val -= 4294967296;
-                    break;
-                case MysqlType::LONGLONG:
-                    if ($val > 9223372036854775807) {
-                        $val = (int)($val - 18446744073709551616);
-                    } else {
-                        $val = (int)$val;
+                    if ($val >= DataTypeBounds::INT_SIGN_BIT) {
+                        $val -= DataTypeBounds::INT_RANGE;
                     }
                     break;
             }
         }
 
-        // Handle Unsigned LONGLONG
-        if ($column->type === MysqlType::LONGLONG && ($column->flags & self::UNSIGNED_FLAG)) {
-            // If it's a float (exceeds PHP_INT_MAX), convert to string
-            if (is_float($val)) {
+        return $val;
+    }
+
+    private function readLongLong(PayloadReader $reader, ColumnDefinition $column): int|string
+    {
+        $bytes = $reader->readFixedString(8);
+
+        if ($column->flags & ColumnFlags::UNSIGNED_FLAG) {
+            $val = hexdec(bin2hex(strrev($bytes)));
+            if (\is_float($val)) {
                 return number_format($val, 0, '', '');
             }
+            return (int)$val;
         }
 
-        return $val;
+        $parts = unpack('V2', $bytes);
+        return ($parts[2] << 32) | $parts[1];
     }
 
     private function readBinaryDateTime(PayloadReader $reader, int $type): ?string
@@ -380,6 +407,7 @@ final class ExecuteHandler
             if ($type === MysqlType::DATE) {
                 return '0000-00-00';
             }
+
             return '0000-00-00 00:00:00';
         }
 
@@ -404,7 +432,6 @@ final class ExecuteHandler
                 $date .= \sprintf('.%06d', $microseconds);
             }
         } else {
-            // Length was 4 (Date only), but type is DATETIME/TIMESTAMP
             $date .= ' 00:00:00';
         }
 
@@ -451,22 +478,25 @@ final class ExecuteHandler
         $this->sequenceId++;
     }
 
-    private function readStringGivenLength(PayloadReader $reader, int $firstByte): string 
+    private function readStringGivenLength(PayloadReader $reader, int $firstByte): string
     {
         if ($firstByte < 251) {
             return $reader->readFixedString($firstByte);
         }
-        
-        if ($firstByte === 0xfc) {
+
+        if ($firstByte === LengthEncodedType::INT16_LENGTH) {
             $len = $reader->readFixedInteger(2);
+
             return $reader->readFixedString((int)$len);
         }
-        if ($firstByte === 0xfd) {
+        if ($firstByte === LengthEncodedType::INT24_LENGTH) {
             $len = $reader->readFixedInteger(3);
+
             return $reader->readFixedString((int)$len);
         }
-        if ($firstByte === 0xfe) {
+        if ($firstByte === LengthEncodedType::INT64_LENGTH) {
             $len = $reader->readFixedInteger(8);
+
             return $reader->readFixedString((int)$len);
         }
 

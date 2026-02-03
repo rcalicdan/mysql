@@ -27,6 +27,7 @@ describe('PrepareHandler', function () {
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once()->andReturnUsing(function ($packet) {
             expect(strlen($packet))->toBeGreaterThan(0);
+
             return true;
         });
 
@@ -72,13 +73,14 @@ describe('PrepareHandler', function () {
         expect($rejected)->toBeTrue()
             ->and($errorMessage)->toContain('Prepare Error')
             ->and($errorMessage)->toContain('1064')
-            ->and($result)->toBeTrue();
+            ->and($result)->toBeTrue()
+        ;
     });
 
     it('handles successful prepare with no params and no columns', function () {
         $connection = Mockery::mock(MysqlConnection::class);
         $connection->shouldReceive('closeStatement')->andReturn(Promise::resolved());
-        
+
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -112,13 +114,14 @@ describe('PrepareHandler', function () {
             ->and($stmt->id)->toBe(123)
             ->and($stmt->numParams)->toBe(0)
             ->and($stmt->numColumns)->toBe(0)
-            ->and($result)->toBeTrue();
+            ->and($result)->toBeTrue()
+        ;
     });
 
     it('handles successful prepare with params only', function () {
         $connection = Mockery::mock(MysqlConnection::class);
         $connection->shouldReceive('closeStatement')->andReturn(Promise::resolved());
-        
+
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -174,13 +177,14 @@ describe('PrepareHandler', function () {
             ->and($stmt->id)->toBe(124)
             ->and($stmt->numParams)->toBe(1)
             ->and($stmt->numColumns)->toBe(0)
-            ->and($result3)->toBeTrue();
+            ->and($result3)->toBeTrue()
+        ;
     });
 
     it('handles successful prepare with columns only', function () {
         $connection = Mockery::mock(MysqlConnection::class);
         $connection->shouldReceive('closeStatement')->andReturn(Promise::resolved());
-        
+
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -251,13 +255,14 @@ describe('PrepareHandler', function () {
             ->and($stmt->id)->toBe(125)
             ->and($stmt->numParams)->toBe(0)
             ->and($stmt->numColumns)->toBe(2)
-            ->and($result4)->toBeTrue();
+            ->and($result4)->toBeTrue()
+        ;
     });
 
     it('handles successful prepare with both params and columns', function () {
         $connection = Mockery::mock(MysqlConnection::class);
         $connection->shouldReceive('closeStatement')->andReturn(Promise::resolved());
-        
+
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -350,7 +355,8 @@ describe('PrepareHandler', function () {
             ->and($stmt->id)->toBe(126)
             ->and($stmt->numParams)->toBe(1)
             ->and($stmt->numColumns)->toBe(2)
-            ->and($result6)->toBeTrue();
+            ->and($result6)->toBeTrue()
+        ;
     });
 
     it('handles unexpected packet in header state', function () {

@@ -6,7 +6,7 @@ namespace Hibla\Mysql\Internals;
 
 /**
  * Unified result object for all query types (SELECT, INSERT, UPDATE, DELETE, etc.).
- * 
+ *
  * This object contains both row data (for SELECT queries) and execution metadata
  * (for INSERT/UPDATE/DELETE). Methods gracefully handle both cases:
  * - For SELECT: rows are populated, affectedRows is 0

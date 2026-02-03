@@ -68,7 +68,7 @@ function buildMySQLResultSetHeaderPacket(int $columnCount): string
     $payload = chr($columnCount);
     $length = strlen($payload);
     $header = substr(pack('V', $length), 0, 3) . chr(1);
-    
+
     return $header . $payload;
 }
 
@@ -79,9 +79,9 @@ function buildMySQLErrPacket(int $errorCode, string $errorMessage): string
     $payload .= '#';
     $payload .= '28000';
     $payload .= $errorMessage;
-    
+
     $length = strlen($payload);
     $header = substr(pack('V', $length), 0, 3) . chr(1);
-    
+
     return $header . $payload;
 }

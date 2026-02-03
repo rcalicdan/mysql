@@ -35,12 +35,12 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
  */
 final class HandshakeHandler
 {
-    private Promise $promise;
-    private int $sequenceId = 0;
     private string $scramble = '';
     private string $authPlugin = '';
     private int $serverCapabilities = 0;
+    private int $sequenceId = 0;
     private bool $isSslEnabled = false;
+    private Promise $promise;
 
     public function __construct(
         private readonly SocketConnection $socket,

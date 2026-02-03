@@ -26,6 +26,7 @@ describe('PingHandler', function () {
         $socket->shouldReceive('write')->once()->andReturnUsing(function ($packet) {
             expect(strlen($packet))->toBe(5);
             expect(ord($packet[4]))->toBe(0x0E);
+
             return true;
         });
 

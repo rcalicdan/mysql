@@ -49,7 +49,7 @@ use Throwable;
 class Connection
 {
     /**
-     *  @var SplQueue<CommandRequest> 
+     *  @var SplQueue<CommandRequest>
      */
     private SplQueue $commandQueue;
 
@@ -174,22 +174,11 @@ class Connection
      * Executes a standard SQL query (buffered).
      *
      * @param string $sql
-     * @return PromiseInterface<QueryResult>
+     * @return PromiseInterface<Result>
      */
     public function query(string $sql): PromiseInterface
     {
         return $this->enqueueCommand(CommandRequest::TYPE_QUERY, $sql);
-    }
-
-    /**
-     * Executes a SQL command (INSERT, UPDATE, DELETE).
-     *
-     * @param string $sql
-     * @return PromiseInterface<ExecuteResult>
-     */
-    public function execute(string $sql): PromiseInterface
-    {
-        return $this->query($sql);
     }
 
     /**
@@ -214,7 +203,7 @@ class Connection
 
     /**
      * Begins a database transaction on this specific connection.
-     * 
+     *
      * @param IsolationLevel|null $isolationLevel The isolation level to set.
      * @param PoolManager|null $pool The pool manager to pass to the transaction for auto-release.
      * @return PromiseInterface<Transaction>
@@ -223,7 +212,7 @@ class Connection
     {
         $startTransaction = function () use ($pool) {
             return $this->query('START TRANSACTION')->then(
-                fn() => new Transaction($this, $pool)
+                fn () => new Transaction($this, $pool)
             );
         };
 
@@ -232,7 +221,8 @@ class Connection
         }
 
         return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
-            ->then($startTransaction);
+            ->then($startTransaction)
+        ;
     }
 
     /**
@@ -293,7 +283,7 @@ class Connection
             $this->currentCommand = null;
         }
 
-        while (!$this->commandQueue->isEmpty()) {
+        while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
 
             if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
@@ -337,7 +327,7 @@ class Connection
     }
 
     /**
-     * @return PromiseInterface<ExecuteResult|QueryResult>
+     * @return PromiseInterface<Result>
      */
     public function executeStatement(PreparedStatement $stmt, array $params): PromiseInterface
     {
@@ -379,7 +369,7 @@ class Connection
             '',
             [],
             $stmtId
-        );  
+        );
     }
 
     private function enqueueCommand(

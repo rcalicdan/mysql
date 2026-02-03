@@ -34,7 +34,7 @@ class ManagedPreparedStatement
      * Execute the prepared statement with the given parameters (buffered).
      *
      * @param array<int, mixed> $params The parameters to bind to the statement
-     * @return PromiseInterface<ExecuteResult|QueryResult>
+     * @return PromiseInterface<Result>
      * @throws \RuntimeException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
@@ -64,26 +64,6 @@ class ManagedPreparedStatement
     }
 
     /**
-     * Get the number of parameters this statement expects.
-     *
-     * @return int
-     */
-    public function getNumParams(): int
-    {
-        return $this->statement->numParams;
-    }
-
-    /**
-     * Get the number of columns in the result set.
-     *
-     * @return int
-     */
-    public function getNumColumns(): int
-    {
-        return $this->statement->numColumns;
-    }
-
-    /**
      * Closes the prepared statement and releases the connection back to the pool.
      *
      * This method is idempotent and safe to call multiple times.
@@ -95,7 +75,8 @@ class ManagedPreparedStatement
         return $this->statement->close()
             ->finally(function () {
                 $this->releaseConnection();
-            });
+            })
+        ;
     }
 
     /**

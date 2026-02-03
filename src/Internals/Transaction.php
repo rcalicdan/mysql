@@ -32,7 +32,8 @@ class Transaction
     public function __construct(
         private readonly MysqlConnection $connection,
         private readonly ?PoolManager $pool = null
-    ) {}
+    ) {
+    }
 
     /**
      * Executes a SELECT query and returns all matching rows.
@@ -42,7 +43,7 @@ class Transaction
      *
      * @param string $sql SQL query to execute with optional ? placeholders
      * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<QueryResult>
+     * @return PromiseInterface<Result>
      */
     public function query(string $sql, array $params = []): PromiseInterface
     {
@@ -58,13 +59,15 @@ class Transaction
         return $this->connection->prepare($sql)
             ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                 $stmtRef = $stmt;
+
                 return $stmt->executeStatement($params);
             })
             ->finally(function () use (&$stmtRef) {
                 if ($stmtRef !== null) {
                     return $stmtRef->close();
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -75,14 +78,14 @@ class Transaction
      *
      * @param string $sql SQL statement to execute with optional ? placeholders
      * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<ExecuteResult>
+     * @return PromiseInterface<Result>
      */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         $this->ensureActive();
 
         if (\count($params) === 0) {
-            return $this->connection->execute($sql);
+            return $this->connection->query($sql);
         }
 
         /** @var PreparedStatement|null $stmtRef */
@@ -91,13 +94,15 @@ class Transaction
         return $this->connection->prepare($sql)
             ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                 $stmtRef = $stmt;
+
                 return $stmt->executeStatement($params);
             })
             ->finally(function () use (&$stmtRef) {
                 if ($stmtRef !== null) {
                     return $stmtRef->close();
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -114,7 +119,8 @@ class Transaction
         return $this->query($sql, $params)
             ->then(function ($result) {
                 return $result->fetchOne();
-            });
+            })
+        ;
     }
 
     /**
@@ -138,7 +144,8 @@ class Transaction
                 }
 
                 return $row[$column] ?? null;
-            });
+            })
+        ;
     }
 
     /**
@@ -171,7 +178,6 @@ class Transaction
         $this->onRollbackCallbacks[] = $callback;
     }
 
-
     /**
      * Prepares a statement for execution within the transaction.
      *
@@ -191,7 +197,7 @@ class Transaction
      *
      * @return PromiseInterface<void>
      */
-    public function commit(): PromiseInterface 
+    public function commit(): PromiseInterface
     {
         $this->ensureActive();
         $this->active = false;
@@ -199,12 +205,14 @@ class Transaction
         return $this->connection->query('COMMIT')
             ->then(function () {
                 $this->executeCallbacks($this->onCommitCallbacks);
-                $this->onRollbackCallbacks = []; 
+                $this->onRollbackCallbacks = [];
+
                 return null;
             })
             ->finally(function () {
                 $this->releaseConnection();
-            });
+            })
+        ;
     }
 
     /**
@@ -213,7 +221,7 @@ class Transaction
      *
      * @return PromiseInterface<void>
      */
-    public function rollback(): PromiseInterface 
+    public function rollback(): PromiseInterface
     {
         $this->ensureActive();
         $this->active = false;
@@ -221,12 +229,14 @@ class Transaction
         return $this->connection->query('ROLLBACK')
             ->then(function () {
                 $this->executeCallbacks($this->onRollbackCallbacks);
-                $this->onCommitCallbacks = []; 
+                $this->onCommitCallbacks = [];
+
                 return null;
             })
             ->finally(function () {
                 $this->releaseConnection();
-            });
+            })
+        ;
     }
 
     /**
@@ -241,7 +251,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -256,7 +267,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -271,7 +283,8 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
-            ->then(fn() => null);
+            ->then(fn () => null)
+        ;
     }
 
     /**
@@ -280,7 +293,7 @@ class Transaction
      */
     public function isActive(): bool
     {
-        return $this->active && !$this->connection->isClosed();
+        return $this->active && ! $this->connection->isClosed();
     }
 
     /**
@@ -333,7 +346,7 @@ class Transaction
             throw new \RuntimeException('Connection is closed');
         }
 
-        if (!$this->active) {
+        if (! $this->active) {
             throw new \LogicException('Transaction is no longer active');
         }
     }
