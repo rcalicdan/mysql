@@ -38,9 +38,9 @@ class ManagedPreparedStatement
      * @throws \RuntimeException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
-    public function executeStatement(array $params = []): PromiseInterface
+    public function execute(array $params = []): PromiseInterface
     {
-        return $this->statement->executeStatement($params);
+        return $this->statement->execute($params);
     }
 
     /**

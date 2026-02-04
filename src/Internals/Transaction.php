@@ -4,19 +4,17 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
-use Hibla\Mysql\Internals\Connection as MysqlConnection;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Promise\Interfaces\PromiseInterface;
 
 /**
- * Represents a database transaction with automatic connection pool management.
+ * Transaction implementation with automatic pool management.
  *
- * This class provides a unified API for transaction operations, including:
- * - Transaction control (commit, rollback, savepoints)
- * - Query execution (with and without parameters)
- * - Convenience methods (fetchOne, fetchValue)
- * - Prepared statements
- * - Automatic connection release back to the pool
+ * This class is exclusively created by MysqlClient and always manages
+ * pooled connections. The connection is automatically released back to
+ * the pool on commit/rollback or when the transaction goes out of scope.
+ *
+ * @internal Created by MysqlClient::beginTransaction() - do not instantiate directly.
  */
 class Transaction
 {
@@ -29,22 +27,20 @@ class Transaction
     /** @var list<callable(): void> */
     private array $onRollbackCallbacks = [];
 
+    /**
+     * Creates a new transaction with automatic pool management.
+     *
+     * @internal Use MysqlClient::beginTransaction() instead.
+     *
+     * @param Connection $connection The database connection
+     * @param PoolManager $pool The pool manager for auto-release
+     */
     public function __construct(
-        private readonly MysqlConnection $connection,
-        private readonly ?PoolManager $pool = null
+        private readonly Connection $connection,
+        private readonly PoolManager $pool
     ) {
     }
 
-    /**
-     * Executes a SELECT query and returns all matching rows.
-     *
-     * If parameters are provided, the query is automatically prepared as a
-     * prepared statement before execution to prevent SQL injection.
-     *
-     * @param string $sql SQL query to execute with optional ? placeholders
-     * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<Result>
-     */
     public function query(string $sql, array $params = []): PromiseInterface
     {
         $this->ensureActive();
@@ -60,7 +56,7 @@ class Transaction
             ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                 $stmtRef = $stmt;
 
-                return $stmt->executeStatement($params);
+                return $stmt->execute($params);
             })
             ->finally(function () use (&$stmtRef) {
                 if ($stmtRef !== null) {
@@ -70,74 +66,22 @@ class Transaction
         ;
     }
 
-    /**
-     * Executes a SQL statement (INSERT, UPDATE, DELETE, etc.).
-     *
-     * If parameters are provided, the statement is automatically prepared as a
-     * prepared statement before execution to prevent SQL injection.
-     *
-     * @param string $sql SQL statement to execute with optional ? placeholders
-     * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<Result>
-     */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
-        $this->ensureActive();
-
-        if (\count($params) === 0) {
-            return $this->connection->query($sql);
-        }
-
-        /** @var PreparedStatement|null $stmtRef */
-        $stmtRef = null;
-
-        return $this->connection->prepare($sql)
-            ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
-                $stmtRef = $stmt;
-
-                return $stmt->executeStatement($params);
-            })
-            ->finally(function () use (&$stmtRef) {
-                if ($stmtRef !== null) {
-                    return $stmtRef->close();
-                }
-            })
-        ;
+        return $this->query($sql, $params);
     }
 
-    /**
-     * Executes a SELECT query and returns the first matching row.
-     *
-     * Returns null if no rows match the query.
-     *
-     * @param string $sql SQL query to execute with optional ? placeholders
-     * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<array<string, mixed>|null>
-     */
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function ($result) {
-                return $result->fetchOne();
-            })
+            ->then(fn (Result $result) => $result->fetchOne())
         ;
     }
 
-    /**
-     * Executes a query and returns a single column value from the first row.
-     *
-     * Useful for queries that return a single scalar value like COUNT, MAX, etc.
-     * Returns null if the query returns no rows.
-     *
-     * @param string $sql SQL query to execute with optional ? placeholders
-     * @param string|int $column Column name or index (default: 0)
-     * @param array<int, mixed> $params Optional parameters for prepared statement
-     * @return PromiseInterface<mixed>
-     */
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function ($result) use ($column) {
+            ->then(function (Result $result) use ($column) {
                 $row = $result->fetchOne();
                 if ($row === null) {
                     return null;
@@ -148,42 +92,18 @@ class Transaction
         ;
     }
 
-    /**
-     * Registers a callback to be executed only if the transaction is successfully committed.
-     *
-     * Callbacks are executed after the COMMIT command succeeds but before the main
-     * commit() promise is resolved. If a callback throws an exception, the commit()
-     * promise will be rejected with that exception.
-     *
-     * @param callable(): void $callback The closure to execute on commit.
-     */
     public function onCommit(callable $callback): void
     {
         $this->ensureActive();
         $this->onCommitCallbacks[] = $callback;
     }
 
-    /**
-     * Registers a callback to be executed only if the transaction is rolled back.
-     *
-     * Callbacks are executed after the ROLLBACK command succeeds but before the main
-     * rollback() promise is resolved. If a callback throws an exception, the
-     * rollback() promise will be rejected with that exception.
-     *
-     * @param callable(): void $callback The closure to execute on rollback.
-     */
     public function onRollback(callable $callback): void
     {
         $this->ensureActive();
         $this->onRollbackCallbacks[] = $callback;
     }
 
-    /**
-     * Prepares a statement for execution within the transaction.
-     *
-     * @param string $sql SQL statement with ? placeholders
-     * @return PromiseInterface<PreparedStatement>
-     */
     public function prepare(string $sql): PromiseInterface
     {
         $this->ensureActive();
@@ -191,12 +111,6 @@ class Transaction
         return $this->connection->prepare($sql);
     }
 
-    /**
-     * Commits the transaction, making all changes permanent.
-     * Automatically releases the connection back to the pool if pooled.
-     *
-     * @return PromiseInterface<void>
-     */
     public function commit(): PromiseInterface
     {
         $this->ensureActive();
@@ -215,12 +129,6 @@ class Transaction
         ;
     }
 
-    /**
-     * Rolls back the transaction, discarding all changes.
-     * Automatically releases the connection back to the pool if pooled.
-     *
-     * @return PromiseInterface<void>
-     */
     public function rollback(): PromiseInterface
     {
         $this->ensureActive();
@@ -239,12 +147,6 @@ class Transaction
         ;
     }
 
-    /**
-     * Creates a savepoint within the transaction.
-     *
-     * @param string $identifier The name of the savepoint.
-     * @return PromiseInterface<void>
-     */
     public function savepoint(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -255,12 +157,6 @@ class Transaction
         ;
     }
 
-    /**
-     * Rolls back the transaction to a named savepoint.
-     *
-     * @param string $identifier The name of the savepoint to roll back to.
-     * @return PromiseInterface<void>
-     */
     public function rollbackTo(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -271,12 +167,6 @@ class Transaction
         ;
     }
 
-    /**
-     * Releases a named savepoint.
-     *
-     * @param string $identifier The name of the savepoint to release.
-     * @return PromiseInterface<void>
-     */
     public function releaseSavepoint(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -287,40 +177,19 @@ class Transaction
         ;
     }
 
-    /**
-     * Checks if the transaction is still active.
-     * It becomes inactive after a commit or rollback.
-     */
     public function isActive(): bool
     {
         return $this->active && ! $this->connection->isClosed();
     }
 
-    /**
-     * Checks if the parent connection has been closed.
-     */
     public function isClosed(): bool
     {
         return $this->connection->isClosed();
     }
 
     /**
-     * Releases the connection back to the pool.
-     * This is called automatically by commit() and rollback() if the transaction is pooled.
-     */
-    private function releaseConnection(): void
-    {
-        if ($this->released || $this->pool === null) {
-            return;
-        }
-
-        $this->released = true;
-        $this->pool->release($this->connection);
-    }
-
-    /**
-     * Destructor ensures the connection is released if the transaction
-     * object is destroyed without explicit commit/rollback.
+     * Destructor ensures the connection is released when the transaction
+     * goes out of scope without explicit commit/rollback.
      */
     public function __destruct()
     {
@@ -328,11 +197,23 @@ class Transaction
     }
 
     /**
-     * Executes an array of callbacks, failing the promise chain on the first error.
+     * Releases the connection back to the pool.
+     * This is automatically called on commit/rollback.
      *
-     * @param list<callable(): void> $callbacks
-     * @throws \Throwable
+     * @return void
      */
+    private function releaseConnection(): void
+    {
+        if ($this->released) {
+            return;
+        }
+
+        $this->onCommitCallbacks = [];
+        $this->onRollbackCallbacks = [];
+        $this->released = true;
+        $this->pool->release($this->connection);
+    }
+
     private function executeCallbacks(array $callbacks): void
     {
         foreach ($callbacks as $callback) {

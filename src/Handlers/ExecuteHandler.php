@@ -49,7 +49,8 @@ final class ExecuteHandler
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     public function start(
         int $stmtId,
@@ -219,7 +220,7 @@ final class ExecuteHandler
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $columns = array_map(fn($c) => $c->name, $this->columnDefinitions);
+                $columns = array_map(fn ($c) => $c->name, $this->columnDefinitions);
                 $result = new Result(
                     rows: $this->rows,
                     affectedRows: 0,
@@ -360,22 +361,26 @@ final class ExecuteHandler
                     if ($val >= DataTypeBounds::TINYINT_SIGN_BIT) {
                         $val -= DataTypeBounds::TINYINT_RANGE;
                     }
+
                     break;
                 case MysqlType::SHORT:
                 case MysqlType::YEAR:
                     if ($val >= DataTypeBounds::SMALLINT_SIGN_BIT) {
                         $val -= DataTypeBounds::SMALLINT_RANGE;
                     }
+
                     break;
                 case MysqlType::INT24:
                     if ($val >= DataTypeBounds::MEDIUMINT_SIGN_BIT) {
                         $val -= DataTypeBounds::MEDIUMINT_RANGE;
                     }
+
                     break;
                 case MysqlType::LONG:
                     if ($val >= DataTypeBounds::INT_SIGN_BIT) {
                         $val -= DataTypeBounds::INT_RANGE;
                     }
+
                     break;
             }
         }
@@ -392,10 +397,12 @@ final class ExecuteHandler
             if (\is_float($val)) {
                 return number_format($val, 0, '', '');
             }
+
             return (int)$val;
         }
 
         $parts = unpack('V2', $bytes);
+
         return ($parts[2] << 32) | $parts[1];
     }
 

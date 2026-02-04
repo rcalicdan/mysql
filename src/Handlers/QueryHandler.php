@@ -117,6 +117,7 @@ final class QueryHandler
             $this->currentPromise?->reject(
                 new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}")
             );
+
             return;
         }
 
@@ -130,17 +131,20 @@ final class QueryHandler
 
             if ($this->hasMoreResults($frame->statusFlags)) {
                 $this->prepareDrain($result, null);
+
                 return;
             }
 
             $finalResult = $this->primaryResult ?? $result;
             $this->currentPromise?->resolve($finalResult);
+
             return;
         }
 
         if ($frame instanceof ResultSetHeader) {
             $this->columnCount = $frame->columnCount;
             $this->state = ParserState::COLUMNS;
+
             return;
         }
 
@@ -154,7 +158,7 @@ final class QueryHandler
 
     private function prepareDrain(?Result $result, ?StreamStats $stats): void
     {
-        if (!$this->isDraining) {
+        if (! $this->isDraining) {
             $this->primaryResult = $result;
             $this->primaryStreamStats = $stats;
             $this->isDraining = true;
@@ -176,11 +180,13 @@ final class QueryHandler
             }
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
+
             return;
         }
 
         if ($this->isDraining) {
             $reader->readRestOfPacketString();
+
             return;
         }
 
@@ -204,11 +210,13 @@ final class QueryHandler
 
         if ($frame instanceof ErrPacket) {
             $this->handleRowError($frame);
+
             return;
         }
 
         if ($frame instanceof EofPacket) {
             $this->handleEndOfResultSet($frame);
+
             return;
         }
 
@@ -258,6 +266,7 @@ final class QueryHandler
 
         if ($this->hasMoreResults($packet->statusFlags)) {
             $this->prepareDrain($currentResult, $currentStats);
+
             return;
         }
 
@@ -290,7 +299,6 @@ final class QueryHandler
             $this->rows[] = $assocRow;
         }
     }
-
 
     private function convertRowToAssociativeArray(TextRow $row): array
     {

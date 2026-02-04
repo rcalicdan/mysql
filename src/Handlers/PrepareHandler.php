@@ -29,7 +29,8 @@ final class PrepareHandler
         private readonly MysqlConnection $connection,
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     public function start(string $sql, Promise $promise): void
     {

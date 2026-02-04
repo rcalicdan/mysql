@@ -5,13 +5,11 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Internals;
 
 use Hibla\Mysql\Enums\ConnectionState;
-use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Handlers\ExecuteHandler;
 use Hibla\Mysql\Handlers\HandshakeHandler;
 use Hibla\Mysql\Handlers\PingHandler;
 use Hibla\Mysql\Handlers\PrepareHandler;
 use Hibla\Mysql\Handlers\QueryHandler;
-use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\CommandRequest;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Mysql\ValueObjects\ExecuteStreamContext;
@@ -202,30 +200,6 @@ class Connection
     }
 
     /**
-     * Begins a database transaction on this specific connection.
-     *
-     * @param IsolationLevel|null $isolationLevel The isolation level to set.
-     * @param PoolManager|null $pool The pool manager to pass to the transaction for auto-release.
-     * @return PromiseInterface<Transaction>
-     */
-    public function beginTransaction(?IsolationLevel $isolationLevel = null, ?PoolManager $pool = null): PromiseInterface
-    {
-        $startTransaction = function () use ($pool) {
-            return $this->query('START TRANSACTION')->then(
-                fn () => new Transaction($this, $pool)
-            );
-        };
-
-        if ($isolationLevel === null) {
-            return $startTransaction();
-        }
-
-        return $this->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}")
-            ->then($startTransaction)
-        ;
-    }
-
-    /**
      * Prepares a SQL statement.
      *
      * @param string $sql
@@ -265,7 +239,6 @@ class Connection
             $this->socket = null;
         }
 
-        // Release references
         $this->packetReader = null;
         $this->handshakeHandler = null;
         $this->queryHandler = null;
@@ -294,33 +267,21 @@ class Connection
         }
     }
 
-    /**
-     * Destructor to ensure resources are released if object falls out of scope.
-     */
     public function __destruct()
     {
         $this->close();
     }
 
-    /**
-     * Get the current state.
-     */
     public function getState(): ConnectionState
     {
         return $this->state;
     }
 
-    /**
-     * Check if the connection is ready to execute queries.
-     */
     public function isReady(): bool
     {
         return $this->state === ConnectionState::READY;
     }
 
-    /**
-     * Check if the connection has been close
-     */
     public function isClosed(): bool
     {
         return $this->state === ConnectionState::CLOSED;
@@ -343,7 +304,7 @@ class Connection
     /**
      * @return PromiseInterface<StreamStats>
      */
-    public function executeStatementStream(
+    public function executeStream(
         PreparedStatement $stmt,
         array $params,
         StreamContext $context

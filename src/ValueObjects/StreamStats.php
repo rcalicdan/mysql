@@ -19,7 +19,8 @@ class StreamStats
         public readonly int $columnCount,
         public readonly float $duration,
         public readonly int $warningCount = 0
-    ) {}
+    ) {
+    }
 
     /**
      * Get the average rows per second.

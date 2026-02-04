@@ -18,7 +18,8 @@ final class PingHandler
 
     public function __construct(
         private readonly SocketConnection $socket
-    ) {}
+    ) {
+    }
 
     public function start(Promise $promise): void
     {

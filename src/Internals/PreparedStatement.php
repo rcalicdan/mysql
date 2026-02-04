@@ -53,7 +53,7 @@ class PreparedStatement
      * @throws \RuntimeException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
-    public function executeStatement(array $params = []): PromiseInterface
+    public function execute(array $params = []): PromiseInterface
     {
         if ($this->isClosed) {
             throw new \RuntimeException('Cannot execute a closed statement.');
@@ -115,7 +115,7 @@ class PreparedStatement
         $normalizedParams = $this->normalizeParameters($params);
         $context = new StreamContext($onRow, $onComplete, $onError);
 
-        return $this->connection->executeStatementStream($this, $normalizedParams, $context);
+        return $this->connection->executeStream($this, $normalizedParams, $context);
     }
 
     /**
