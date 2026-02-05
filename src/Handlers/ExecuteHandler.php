@@ -10,6 +10,8 @@ use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Hibla\Sql\Exceptions\ConstraintViolationException;
+use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Constants\ColumnFlags;
 use Rcalicdan\MySQLBinaryProtocol\Constants\DataTypeBounds;
 use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
@@ -85,8 +87,17 @@ final class ExecuteHandler
                 ExecuteState::ROWS => $this->handleRow($reader, $length),
             };
         } catch (IncompleteBufferException $e) {
+            // Crucial: Let this bubble up so the packet reader knows to wait for more data.
             throw $e;
         } catch (\Throwable $e) {
+            if (! $e instanceof QueryException && ! $e instanceof ConstraintViolationException) {
+                $e = new QueryException(
+                    'Failed to execute prepared statement: ' . $e->getMessage(),
+                    (int)$e->getCode(),
+                    $e
+                );
+            }
+
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
                 try {
                     ($this->streamContext->onError)($e);
@@ -111,7 +122,12 @@ final class ExecuteHandler
         $frame = $responseParser->parseResponse($reader, $length, $seq);
 
         if ($frame instanceof ErrPacket) {
-            $this->currentPromise?->reject(new \RuntimeException("Execute Error: {$frame->errorMessage}"));
+            $exception = $this->createExceptionFromError(
+                $frame->errorCode,
+                $frame->errorMessage
+            );
+
+            $this->currentPromise?->reject($exception);
 
             return true;
         }
@@ -134,7 +150,10 @@ final class ExecuteHandler
             return false;
         }
 
-        throw new \RuntimeException('Unexpected packet in Execute Header');
+        throw new QueryException(
+            'Unexpected packet type in execute response header',
+            0
+        );
     }
 
     private function handleDataPacket(PayloadReader $reader, int $length): bool
@@ -161,6 +180,7 @@ final class ExecuteHandler
             $this->receivedNewMetadata = true;
         }
 
+        // Removed try-catch here to allow IncompleteBufferException to bubble up
         $catalog = $this->readStringGivenLength($reader, (int)$firstByte);
         $schema = $reader->readLengthEncodedStringOrNull() ?? '';
         $table = $reader->readLengthEncodedStringOrNull() ?? '';
@@ -237,25 +257,31 @@ final class ExecuteHandler
         if ($firstByte === PacketType::ERR) {
             $errorCode = $reader->readFixedInteger(2);
             $reader->readFixedString(1);
-            $reader->readFixedString(5);
+            $sqlState = $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
 
-            $errorMsg = new \RuntimeException("MySQL Error [$errorCode]: $msg");
+            $exception = $this->createExceptionFromError(
+                $errorCode,
+                "MySQL Error [{$errorCode}] [{$sqlState}]: {$msg}"
+            );
 
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
                 try {
-                    ($this->streamContext->onError)($errorMsg);
+                    ($this->streamContext->onError)($exception);
                 } catch (\Throwable $e) {
                 }
             }
 
-            $this->currentPromise?->reject($errorMsg);
+            $this->currentPromise?->reject($exception);
 
             return true;
         }
 
         if ($firstByte !== PacketType::OK) {
-            throw new \RuntimeException('Invalid Binary Row');
+            throw new QueryException(
+                'Invalid binary row packet: expected 0x00, got 0x' . dechex($firstByte),
+                0
+            );
         }
 
         return $this->parseRow($reader);
@@ -312,6 +338,32 @@ final class ExecuteHandler
         }
 
         return false;
+    }
+
+    /**
+     * Creates appropriate exception based on MySQL error code.
+     */
+    private function createExceptionFromError(int $errorCode, string $message): \Throwable
+    {
+        $constraintErrors = [
+            1062 => 'Duplicate entry (UNIQUE constraint)',
+            1451 => 'Cannot delete parent row (FOREIGN KEY constraint)',
+            1452 => 'Cannot add child row (FOREIGN KEY constraint)',
+            1048 => 'Column cannot be null (NOT NULL constraint)',
+            3819 => 'Check constraint violated',
+            1216 => 'Cannot add foreign key constraint',
+            1217 => 'Cannot delete foreign key constraint',
+            1364 => 'Field doesn\'t have default value (NOT NULL constraint)',
+        ];
+
+        if (isset($constraintErrors[$errorCode])) {
+            return new ConstraintViolationException(
+                $message . ' - ' . $constraintErrors[$errorCode],
+                $errorCode
+            );
+        }
+
+        return new QueryException($message, $errorCode);
     }
 
     private function isColumnNull(string $nullBitmap, int $index): bool

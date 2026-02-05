@@ -6,6 +6,7 @@ namespace Hibla\Mysql\Internals;
 
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Promise\Interfaces\PromiseInterface;
+use Hibla\Sql\Exceptions\TransactionException;
 
 /**
  * Transaction implementation with automatic pool management.
@@ -117,12 +118,21 @@ class Transaction
         $this->active = false;
 
         return $this->connection->query('COMMIT')
-            ->then(function () {
-                $this->executeCallbacks($this->onCommitCallbacks);
-                $this->onRollbackCallbacks = [];
+            ->then(
+                function () {
+                    $this->executeCallbacks($this->onCommitCallbacks);
+                    $this->onRollbackCallbacks = [];
 
-                return null;
-            })
+                    return null;
+                },
+                function (\Throwable $e) {
+                    throw new TransactionException(
+                        'Failed to commit transaction: ' . $e->getMessage(),
+                        (int)$e->getCode(),
+                        $e
+                    );
+                }
+            )
             ->finally(function () {
                 $this->releaseConnection();
             })
@@ -135,12 +145,21 @@ class Transaction
         $this->active = false;
 
         return $this->connection->query('ROLLBACK')
-            ->then(function () {
-                $this->executeCallbacks($this->onRollbackCallbacks);
-                $this->onCommitCallbacks = [];
+            ->then(
+                function () {
+                    $this->executeCallbacks($this->onRollbackCallbacks);
+                    $this->onCommitCallbacks = [];
 
-                return null;
-            })
+                    return null;
+                },
+                function (\Throwable $e) {
+                    throw new TransactionException(
+                        'Failed to rollback transaction: ' . $e->getMessage(),
+                        (int)$e->getCode(),
+                        $e
+                    );
+                }
+            )
             ->finally(function () {
                 $this->releaseConnection();
             })
@@ -153,7 +172,16 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("SAVEPOINT {$escaped}")
-            ->then(fn () => null)
+            ->then(
+                fn () => null,
+                function (\Throwable $e) use ($identifier) {
+                    throw new TransactionException(
+                        "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
+                        (int)$e->getCode(),
+                        $e
+                    );
+                }
+            )
         ;
     }
 
@@ -163,7 +191,16 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
-            ->then(fn () => null)
+            ->then(
+                fn () => null,
+                function (\Throwable $e) use ($identifier) {
+                    throw new TransactionException(
+                        "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
+                        (int)$e->getCode(),
+                        $e
+                    );
+                }
+            )
         ;
     }
 
@@ -173,7 +210,16 @@ class Transaction
         $escaped = $this->escapeIdentifier($identifier);
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
-            ->then(fn () => null)
+            ->then(
+                fn () => null,
+                function (\Throwable $e) use ($identifier) {
+                    throw new TransactionException(
+                        "Failed to release savepoint '{$identifier}': " . $e->getMessage(),
+                        (int)$e->getCode(),
+                        $e
+                    );
+                }
+            )
         ;
     }
 
@@ -224,11 +270,11 @@ class Transaction
     private function ensureActive(): void
     {
         if ($this->connection->isClosed()) {
-            throw new \RuntimeException('Connection is closed');
+            throw new TransactionException('Cannot perform operation: connection is closed');
         }
 
         if (! $this->active) {
-            throw new \LogicException('Transaction is no longer active');
+            throw new TransactionException('Cannot perform operation: transaction is no longer active');
         }
     }
 

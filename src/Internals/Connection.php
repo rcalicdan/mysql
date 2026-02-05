@@ -20,11 +20,12 @@ use Hibla\Promise\Promise;
 use Hibla\Socket\Connector;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Socket\Interfaces\ConnectorInterface;
+use Hibla\Sql\Exceptions\ConnectionException;
+use Hibla\Sql\Exceptions\TimeoutException;
 use LogicException;
 use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
-use RuntimeException;
 use SplQueue;
 use Throwable;
 
@@ -247,12 +248,16 @@ class Connection
         $this->pingHandler = null;
 
         if ($this->connectPromise) {
-            $this->connectPromise->reject(new RuntimeException('Connection closed'));
+            $this->connectPromise->reject(
+                new ConnectionException('Connection closed before establishing')
+            );
             $this->connectPromise = null;
         }
 
         if ($this->currentCommand) {
-            $this->currentCommand->promise->reject(new RuntimeException('Connection closed'));
+            $this->currentCommand->promise->reject(
+                new ConnectionException('Connection closed during command execution')
+            );
             $this->currentCommand = null;
         }
 
@@ -262,7 +267,9 @@ class Connection
             if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
                 $cmd->promise->resolve(null);
             } else {
-                $cmd->promise->reject(new RuntimeException('Connection closed'));
+                $cmd->promise->reject(
+                    new ConnectionException('Connection closed before command could execute')
+                );
             }
         }
     }
@@ -510,7 +517,13 @@ class Connection
 
     private function handleConnectionError(Throwable $e): void
     {
-        $this->handleError($e);
+        $wrappedException = new ConnectionException(
+            'Failed to connect to MySQL server at ' . $this->params->host . ':' . $this->params->port . ': ' . $e->getMessage(),
+            (int)$e->getCode(),
+            $e
+        );
+
+        $this->handleError($wrappedException);
     }
 
     private function handleHandshakeError(Throwable $e): void
@@ -520,7 +533,8 @@ class Connection
 
     private function handleSocketError(Throwable $e): void
     {
-        $this->handleError($e);
+        $wrappedException = $this->wrapSocketError($e);
+        $this->handleError($wrappedException);
     }
 
     private function handleError(Throwable $e): void
@@ -541,7 +555,9 @@ class Connection
         }
         while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(new RuntimeException('Connection closed before execution', 0, $e));
+            $cmd->promise->reject(
+                new ConnectionException('Connection closed before execution', 0, $e)
+            );
         }
         if ($this->socket) {
             $this->socket->close();
@@ -558,7 +574,7 @@ class Connection
 
         $this->state = ConnectionState::CLOSED;
 
-        $exception = new RuntimeException('Connection closed unexpectedly');
+        $exception = new ConnectionException('Connection closed unexpectedly by the server');
 
         if ($this->connectPromise) {
             $this->connectPromise->reject($exception);
@@ -568,5 +584,43 @@ class Connection
         if ($this->currentCommand) {
             $this->currentCommand->promise->reject($exception);
         }
+    }
+
+    private function wrapSocketError(Throwable $e): Throwable
+    {
+        $message = $e->getMessage();
+        $code = $e->getCode();
+
+        if ($this->isTimeoutError($message, $code)) {
+            return new TimeoutException(
+                'Database connection timed out: ' . $message,
+                $code,
+                $e
+            );
+        }
+
+        return new ConnectionException(
+            'Socket error: ' . $message,
+            $code,
+            $e
+        );
+    }
+
+    private function isTimeoutError(string $message, int $code): bool
+    {
+        if ($code === 2006) {
+            return true;
+        }
+
+        $timeoutKeywords = ['timeout', 'timed out', 'connection timeout', 'read timeout'];
+        $lowerMessage = strtolower($message);
+
+        foreach ($timeoutKeywords as $keyword) {
+            if (stripos($lowerMessage, $keyword) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

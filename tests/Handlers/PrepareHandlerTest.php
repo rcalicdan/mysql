@@ -71,7 +71,7 @@ describe('PrepareHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('Prepare Error')
+            ->and($errorMessage)->toContain('Failed to prepare statement')
             ->and($errorMessage)->toContain('1064')
             ->and($result)->toBeTrue()
         ;
@@ -386,6 +386,6 @@ describe('PrepareHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('Unexpected packet in Prepare Header');
+            ->and($errorMessage)->toContain('Unexpected packet type in prepare response header'); 
     });
 });

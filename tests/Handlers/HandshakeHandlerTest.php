@@ -152,7 +152,7 @@ describe('HandshakeHandler', function () {
         $promise = $handler->start($packetReader);
 
         $payloadReader = Mockery::mock(PayloadReader::class);
-        $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFF); // ERR
+        $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFF); 
         $payloadReader->shouldReceive('readFixedInteger')->with(2)->andReturn(1045);
         $payloadReader->shouldReceive('readFixedString')->with(1)->andReturn('#');
         $payloadReader->shouldReceive('readFixedString')->with(5)->andReturn('28000');
@@ -171,7 +171,7 @@ describe('HandshakeHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('MySQL Handshake Error')
+            ->and($errorMessage)->toContain('MySQL Authentication Error')  
             ->and($errorMessage)->toContain('1045')
         ;
     });

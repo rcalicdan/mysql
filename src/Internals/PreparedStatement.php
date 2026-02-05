@@ -8,6 +8,7 @@ use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
+use Hibla\Sql\Exceptions\PreparedException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
@@ -93,7 +94,7 @@ class PreparedStatement
      * @param callable(StreamStats): void|null $onComplete Optional callback when streaming completes.
      * @param callable(\Throwable): void|null $onError Optional callback for error handling.
      * @return PromiseInterface<StreamStats>
-     * @throws \RuntimeException If the statement is closed
+     * @throws PreparedException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
     public function executeStream(
@@ -103,7 +104,7 @@ class PreparedStatement
         ?callable $onError = null
     ): PromiseInterface {
         if ($this->isClosed) {
-            throw new \RuntimeException('Cannot execute a closed statement.');
+            throw new PreparedException('Cannot execute a closed statement.');
         }
 
         if (\count($params) !== $this->numParams) {

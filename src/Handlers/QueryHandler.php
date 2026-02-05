@@ -10,6 +10,8 @@ use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
+use Hibla\Sql\Exceptions\ConstraintViolationException;
+use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
@@ -93,6 +95,14 @@ final class QueryHandler
         } catch (IncompleteBufferException $e) {
             throw $e;
         } catch (\Throwable $e) {
+            if (! $e instanceof QueryException && ! $e instanceof ConstraintViolationException) {
+                $e = new QueryException(
+                    'Failed to execute query: ' . $e->getMessage(),
+                    (int)$e->getCode(),
+                    $e
+                );
+            }
+
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
                 try {
                     ($this->streamContext->onError)($e);
@@ -114,9 +124,12 @@ final class QueryHandler
         $frame = $this->responseParser->parseResponse($reader, $length, $seq);
 
         if ($frame instanceof ErrPacket) {
-            $this->currentPromise?->reject(
-                new \RuntimeException("MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}")
+            $exception = $this->createExceptionFromError(
+                $frame->errorCode,
+                $frame->errorMessage
             );
+
+            $this->currentPromise?->reject($exception);
 
             return;
         }
@@ -148,7 +161,11 @@ final class QueryHandler
             return;
         }
 
-        throw new \RuntimeException('Unexpected packet type in header state');
+        $exception = new QueryException(
+            'Unexpected packet type in query response header',
+            0
+        );
+        $this->currentPromise?->reject($exception);
     }
 
     private function hasMoreResults(int $flags): bool
@@ -203,7 +220,10 @@ final class QueryHandler
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
     {
         if ($this->rowParser === null) {
-            throw new \RuntimeException('Row parser not initialized');
+            $exception = new QueryException('Row parser not initialized', 0);
+            $this->currentPromise?->reject($exception);
+
+            return;
         }
 
         $frame = $this->rowParser->parse($reader, $length, $seq);
@@ -227,8 +247,9 @@ final class QueryHandler
 
     private function handleRowError(ErrPacket $packet): void
     {
-        $exception = new \RuntimeException(
-            "MySQL Error [{$packet->errorCode}]: {$packet->errorMessage}"
+        $exception = $this->createExceptionFromError(
+            $packet->errorCode,
+            $packet->errorMessage
         );
 
         if ($this->streamContext?->onError !== null) {
@@ -335,6 +356,29 @@ final class QueryHandler
         }
     }
 
+    private function createExceptionFromError(int $errorCode, string $message): \Throwable
+    {
+        $constraintErrors = [
+            1062 => 'Duplicate entry (UNIQUE constraint)',
+            1451 => 'Cannot delete parent row (FOREIGN KEY constraint)',
+            1452 => 'Cannot add child row (FOREIGN KEY constraint)',
+            1048 => 'Column cannot be null (NOT NULL constraint)',
+            3819 => 'Check constraint violated',
+            1216 => 'Cannot add foreign key constraint',
+            1217 => 'Cannot delete foreign key constraint',
+            1364 => 'Field doesn\'t have default value (NOT NULL constraint)',
+        ];
+
+        if (isset($constraintErrors[$errorCode])) {
+            return new ConstraintViolationException(
+                $message . ' - ' . $constraintErrors[$errorCode],
+                $errorCode
+            );
+        }
+
+        return new QueryException($message, $errorCode);
+    }
+
     private function readLengthEncodedStringWithFirstByte(PayloadReader $reader, int $firstByte): ?string
     {
         return match ($firstByte) {
@@ -344,8 +388,9 @@ final class QueryHandler
             LengthEncodedType::INT64_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(8)),
             default => $firstByte < LengthEncodedType::NULL_MARKER
                 ? $reader->readFixedString($firstByte)
-                : throw new \RuntimeException(
-                    \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte)
+                : throw new QueryException(
+                    \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte),
+                    0
                 ),
         };
     }

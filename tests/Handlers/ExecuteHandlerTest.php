@@ -100,7 +100,10 @@ describe('ExecuteHandler', function () {
 
         Loop::run();
 
-        expect($errorMessage)->toContain('Execute Error')->and($errorMessage)->toContain('Duplicate entry');
+        expect($errorMessage)
+            ->toContain('Duplicate entry')
+            ->toContain('UNIQUE constraint')
+        ;
     });
 
     it('handles binary result set in buffered mode', function () {

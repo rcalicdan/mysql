@@ -303,14 +303,12 @@ final class MysqlClient
             ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
                 $connection = $conn;
 
-                // Build the transaction start SQL
                 $sql = $isolationLevel !== null
                     ? "SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}; START TRANSACTION"
                     : 'START TRANSACTION';
 
                 return $conn->query($sql)
                     ->then(function () use ($conn, $pool) {
-                        // Create transaction with pool for auto-release
                         return new Transaction($conn, $pool);
                     })
                 ;

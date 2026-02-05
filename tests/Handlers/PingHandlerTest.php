@@ -90,7 +90,9 @@ describe('PingHandler', function () {
 
         Loop::run();
 
-        expect($errorMessage)->toContain('Ping failed')->and($errorMessage)->toContain('Server shutdown in progress');
+        expect($errorMessage)
+            ->toContain('MySQL Ping Error') 
+            ->and($errorMessage)->toContain('Server shutdown in progress');
     });
 
     it('rejects promise on unexpected packet type', function () {

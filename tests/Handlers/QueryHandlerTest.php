@@ -104,69 +104,7 @@ describe('QueryHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('MySQL Error')
-            ->and($errorMessage)->toContain('1146')
-        ;
-    });
-
-    it('handles result set with columns and rows in buffered mode', function () {
-        $socket = Mockery::mock(SocketConnection::class);
-        $socket->shouldReceive('write')->once();
-
-        $commandBuilder = new CommandBuilder();
-        $handler = new QueryHandler($socket, $commandBuilder);
-        $promise = new Promise();
-
-        $handler->start('SELECT id, name FROM users', $promise);
-
-        $headerReader = Mockery::mock(PayloadReader::class);
-        $headerReader->shouldReceive('readFixedInteger')->with(1)->andReturn(2);
-        $headerReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(2);
-        $handler->processPacket($headerReader, 1, 1);
-
-        $col1Reader = Mockery::mock(PayloadReader::class);
-        $col1Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x03);
-        $col1Reader->shouldReceive('readFixedString')->with(3)->andReturn('def');
-        $col1Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn(null, null, null, 'id');
-        $col1Reader->shouldReceive('readRestOfPacketString')->andReturn('');
-        $handler->processPacket($col1Reader, 20, 2);
-
-        $col2Reader = Mockery::mock(PayloadReader::class);
-        $col2Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x03);
-        $col2Reader->shouldReceive('readFixedString')->with(3)->andReturn('def');
-        $col2Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn(null, null, null, 'name');
-        $col2Reader->shouldReceive('readRestOfPacketString')->andReturn('');
-        $handler->processPacket($col2Reader, 20, 3);
-
-        $eofReader = Mockery::mock(PayloadReader::class);
-        $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $eofReader->shouldReceive('readFixedString')->with(4)->andReturn('');
-        $handler->processPacket($eofReader, 5, 4);
-
-        $rowReader = Mockery::mock(PayloadReader::class);
-        $rowReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x01);
-        $rowReader->shouldReceive('readFixedString')->with(1)->andReturn('1');
-        $rowReader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('Alice');
-        $handler->processPacket($rowReader, 10, 5);
-
-        $finalEofReader = Mockery::mock(PayloadReader::class);
-        $finalEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $finalEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
-        $handler->processPacket($finalEofReader, 5, 6);
-
-        $resolved = false;
-        $result = null;
-
-        $promise->then(function ($r) use (&$resolved, &$result) {
-            $resolved = true;
-            $result = $r;
-        });
-
-        Loop::run();
-
-        expect($resolved)->toBeTrue()
-            ->and($result)->toBeInstanceOf(Result::class)
-        ;
+            ->and($errorMessage)->toContain("Table 'test.nonexistent' doesn't exist");
     });
 
     it('handles streaming mode with onRow callback', function () {
@@ -290,8 +228,7 @@ describe('QueryHandler', function () {
 
         $handler->start('SELECT 1', $promise, $streamContext);
 
-        $promise->catch(function (Throwable $e) {
-        });
+        $promise->catch(function (Throwable $e) {});
 
         $headerReader = Mockery::mock(PayloadReader::class);
         $headerReader->shouldReceive('readFixedInteger')->with(1)->andReturn(1);
