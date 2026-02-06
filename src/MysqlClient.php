@@ -11,6 +11,7 @@ use Hibla\Cache\ArrayCache;
 use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
+use Hibla\Mysql\Internals\RowStream;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\ManagedPreparedStatement;
 use Hibla\Mysql\Internals\PreparedStatement;
@@ -188,7 +189,7 @@ final class MysqlClient
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn (Result $result) => $result->getAffectedRows())
+            ->then(fn(Result $result) => $result->getAffectedRows())
         ;
     }
 
@@ -202,7 +203,7 @@ final class MysqlClient
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn (Result $result) => $result->getLastInsertId())
+            ->then(fn(Result $result) => $result->getLastInsertId())
         ;
     }
 
@@ -216,7 +217,7 @@ final class MysqlClient
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn (Result $result) => $result->fetchOne())
+            ->then(fn(Result $result) => $result->fetchOne())
         ;
     }
 
@@ -243,37 +244,62 @@ final class MysqlClient
     }
 
     /**
-     * Stream a SELECT query row-by-row without buffering in memory.
+     * Streams a SELECT query row-by-row without buffering in memory.
      *
-     * @param string $sql The SQL SELECT query to execute
-     * @param callable(array<string, mixed>): void $onRow Callback invoked for each row
-     * @param callable(StreamStats): void|null $onComplete Optional callback when streaming completes
-     * @param callable(\Throwable): void|null $onError Optional callback for error handling
-     * @return PromiseInterface<StreamStats>
+     * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
+     * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
      *
-     * @throws NotInitializedException If this instance is not initialized
+     * This method is ideal for processing large result sets that may exceed memory.
+     * It returns a Promise that resolves to an iterable RowStream object.
+     *
+     * Example:
+     * ```php
+     * // Non-prepared stream
+     * $stream1 = await($client->stream("SELECT * FROM logs"));
+     *
+     * // Prepared stream
+     * $stream2 = await($client->stream("SELECT * FROM logs WHERE level = ?", ['error']));
+     *
+     * foreach ($stream2 as $row) {
+     *     // ... process row
+     * }
+     * ```
+     *
+     * @param string $sql The SQL SELECT query to execute, with ? placeholders if params are used.
+     * @param array<int, mixed> $params Optional parameters to bind. If provided, a prepared statement is used.
+     * @return PromiseInterface<RowStream> A promise resolving to the stream object.
+     *
+     * @throws NotInitializedException If this instance is not initialized.
      */
-    public function streamQuery(
-        string $sql,
-        callable $onRow,
-        ?callable $onComplete = null,
-        ?callable $onError = null
-    ): PromiseInterface {
+    public function stream(string $sql, array $params = []): PromiseInterface
+    {
         $pool = $this->getPool();
-        $connection = null;
 
         return $pool->get()
-            ->then(function (Connection $conn) use ($sql, $onRow, $onComplete, $onError, &$connection) {
-                $connection = $conn;
+            ->then(function (Connection $conn) use ($sql, $params, $pool) {
 
-                return $conn->streamQuery($sql, $onRow, $onComplete, $onError);
-            })
-            ->finally(function () use ($pool, &$connection) {
-                if ($connection !== null) {
-                    $pool->release($connection);
+                $streamPromise = null;
+
+                if (\count($params) === 0) {
+                    $streamPromise = $conn->streamQuery($sql);
+                } else {
+                    $streamPromise = $this->getCachedStatement($conn, $sql)
+                        ->then(function (PreparedStatement $stmt) use ($params) {
+                            return $stmt->executeStream($params);
+                        });
                 }
-            })
-        ;
+
+                return $streamPromise->then(
+                    function (RowStream $stream) use ($conn, $pool) {
+                        $stream->waitForCommand()->finally(fn() => $pool->release($conn));
+                        return $stream;
+                    },
+                    function (\Throwable $e) use ($conn, $pool) {
+                        $pool->release($conn);
+                        throw $e;
+                    }
+                );
+            });
     }
 
     /**
@@ -355,7 +381,7 @@ final class MysqlClient
                     /** @var Transaction $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn () => $callback($tx)));
+                    $result = await(async(fn() => $callback($tx)));
 
                     await($tx->commit());
 

@@ -39,8 +39,7 @@ class Transaction
     public function __construct(
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {
-    }
+    ) {}
 
     public function query(string $sql, array $params = []): PromiseInterface
     {
@@ -67,6 +66,32 @@ class Transaction
         ;
     }
 
+    /**
+     * Streams a query row-by-row within the current transaction context.
+     *
+     * @param string $sql
+     * @param array $params
+     * @return PromiseInterface<RowStream>
+     */
+    public function stream(string $sql, array $params = []): PromiseInterface
+    {
+        $this->ensureActive();
+
+        if (\count($params) === 0) {
+            return $this->connection->streamQuery($sql);
+        }
+
+        return $this->connection->prepare($sql)
+            ->then(function (PreparedStatement $stmt) use ($params) {
+                return $stmt->executeStream($params)
+                    ->then(function (RowStream $stream) use ($stmt) {
+                        $stream->waitForCommand()->finally($stmt->close(...));
+                        return $stream;
+                    });
+            })
+        ;
+    }
+
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params);
@@ -75,7 +100,7 @@ class Transaction
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn (Result $result) => $result->fetchOne())
+            ->then(fn(Result $result) => $result->fetchOne())
         ;
     }
 
@@ -173,7 +198,7 @@ class Transaction
 
         return $this->connection->query("SAVEPOINT {$escaped}")
             ->then(
-                fn () => null,
+                fn() => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
@@ -192,7 +217,7 @@ class Transaction
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
             ->then(
-                fn () => null,
+                fn() => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
@@ -211,7 +236,7 @@ class Transaction
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
             ->then(
-                fn () => null,
+                fn() => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to release savepoint '{$identifier}': " . $e->getMessage(),

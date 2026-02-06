@@ -29,6 +29,8 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 use SplQueue;
 use Throwable;
 
+use function Hibla\async;
+
 /**
  * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
  *
@@ -52,8 +54,6 @@ class Connection
      */
     private SplQueue $commandQueue;
 
-    private readonly ConnectionParams $params;
-
     private ConnectionState $state = ConnectionState::DISCONNECTED;
 
     private ?SocketConnection $socket = null;
@@ -73,6 +73,8 @@ class Connection
     private ?Promise $connectPromise = null;
 
     private ?CommandRequest $currentCommand = null;
+
+    private readonly ConnectionParams $params;
 
     private bool $isClosingError = false;
 
@@ -181,23 +183,35 @@ class Connection
     }
 
     /**
-     * Streams a SELECT query row-by-row.
+     * Streams a SELECT query row-by-row using a Generator.
      *
      * @param string $sql
-     * @param callable(array): void $onRow
-     * @param callable(StreamStats): void|null $onComplete
-     * @param callable(Throwable): void|null $onError
-     * @return PromiseInterface<StreamStats>
+     * @return PromiseInterface<RowStream>
      */
-    public function streamQuery(
-        string $sql,
-        callable $onRow,
-        ?callable $onComplete = null,
-        ?callable $onError = null
-    ): PromiseInterface {
-        $context = new StreamContext($onRow, $onComplete, $onError);
+    public function streamQuery(string $sql): PromiseInterface
+    {
+        return async(function () use ($sql) {
+            $stream = new RowStream();
 
-        return $this->enqueueCommand(CommandRequest::TYPE_STREAM_QUERY, $sql, context: $context);
+            $context = new StreamContext(
+                onRow: $stream->push(...),
+                onComplete: $stream->complete(...),
+                onError: $stream->error(...)
+            );
+
+            $promise = $this->enqueueCommand(
+                CommandRequest::TYPE_STREAM_QUERY,
+                $sql,
+                context: $context
+            );
+
+            $promise->then(
+                $stream->markCommandFinished(...),
+                $stream->error(...)
+            );
+
+            return $stream;
+        });
     }
 
     /**
@@ -481,7 +495,7 @@ class Connection
     private function sendClosePacket(int $stmtId): void
     {
         $payload = \chr(0x19) . pack('V', $stmtId);
-        $header = substr(pack('V', 5), 0, 3) . chr(0);
+        $header = substr(pack('V', 5), 0, 3) . \chr(0);
         $this->socket->write($header . $payload);
     }
 

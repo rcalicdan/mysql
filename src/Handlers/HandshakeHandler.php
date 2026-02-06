@@ -18,6 +18,8 @@ use Rcalicdan\MySQLBinaryProtocol\Constants\CapabilityFlags;
 use Rcalicdan\MySQLBinaryProtocol\Constants\CharsetIdentifiers;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeResponse41;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeV10;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
@@ -75,8 +77,20 @@ final class HandshakeHandler
     {
         try {
             $parser = new HandshakeParser();
-            /** @var \Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeV10 $handshake */
-            $handshake = $parser->parse($reader, $length, $seq);
+            
+            $frame = $parser->parse($reader, $length, $seq);
+
+            if ($frame instanceof ErrPacket) {
+                $exception = new ConnectionException(
+                    "MySQL Connection Error [{$frame->errorCode}]: {$frame->errorMessage}", 
+                    $frame->errorCode
+                );
+                $this->promise->reject($exception);
+                return;
+            }
+
+            /** @var HandshakeV10 $handshake */
+            $handshake = $frame;
 
             $this->scramble = $handshake->authData;
             $this->authPlugin = $handshake->authPlugin;

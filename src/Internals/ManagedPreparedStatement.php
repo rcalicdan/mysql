@@ -47,20 +47,15 @@ class ManagedPreparedStatement
      * Execute the prepared statement with streaming (memory-efficient).
      *
      * @param array<int, mixed> $params The parameters to bind to the statement
-     * @param callable(array): void $onRow Callback invoked for each row
-     * @param callable(StreamStats): void|null $onComplete Optional callback when streaming completes
-     * @param callable(\Throwable): void|null $onError Optional callback for error handling
+     * 
      * @return PromiseInterface<StreamStats>
      * @throws \RuntimeException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
     public function executeStream(
         array $params,
-        callable $onRow,
-        ?callable $onComplete = null,
-        ?callable $onError = null
     ): PromiseInterface {
-        return $this->statement->executeStream($params, $onRow, $onComplete, $onError);
+        return $this->statement->executeStream($params);
     }
 
     /**
@@ -73,9 +68,7 @@ class ManagedPreparedStatement
     public function close(): PromiseInterface
     {
         return $this->statement->close()
-            ->finally(function () {
-                $this->releaseConnection();
-            })
+            ->finally($this->releaseConnection(...))
         ;
     }
 
