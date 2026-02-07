@@ -154,7 +154,7 @@ describe('ExecuteHandler', function () {
         Loop::run();
 
         expect($result)->toBeInstanceOf(Result::class)
-            ->and($result->count())->toBe(1)
+            ->and($result->rowCount())->toBe(1)
             ->and($result->fetchOne()['id'])->toBe(100)
         ;
     });
