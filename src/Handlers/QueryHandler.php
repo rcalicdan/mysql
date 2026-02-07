@@ -43,7 +43,7 @@ final class QueryHandler
     private int $columnCount = 0;
     private int $sequenceId = 0;
     private int $streamedRowCount = 0;
-    private float $streamStartTime = 0;
+    private int $streamStartTime = 0;
     private bool $isDraining = false;
     private readonly ResponseParser $responseParser;
     private readonly ColumnDefinitionParser $columnParser;
@@ -73,7 +73,7 @@ final class QueryHandler
         $this->rowParser = null;
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
-        $this->streamStartTime = microtime(true);
+        $this->streamStartTime = hrtime(true);
         $this->primaryResult = null;
         $this->primaryStreamStats = null;
         $this->isDraining = false;
@@ -265,10 +265,12 @@ final class QueryHandler
     private function handleEndOfResultSet(EofPacket $packet): void
     {
         if ($this->streamContext !== null) {
+            $duration = (hrtime(true) - $this->streamStartTime) / 1e9;
+            
             $stats = new StreamStats(
                 rowCount: $this->streamedRowCount,
                 columnCount: \count($this->columns),
-                duration: microtime(true) - $this->streamStartTime,
+                duration: $duration,
                 warningCount: $packet->warnings
             );
             $currentResult = null;

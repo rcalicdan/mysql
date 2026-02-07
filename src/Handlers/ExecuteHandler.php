@@ -42,7 +42,7 @@ final class ExecuteHandler
     private array $columnDefinitions = [];
     private int $sequenceId = 0;
     private int $streamedRowCount = 0;
-    private float $streamStartTime = 0;
+    private int $streamStartTime = 0;
     private bool $receivedNewMetadata = false;
     private ExecuteState $state = ExecuteState::HEADER;
     private ?StreamContext $streamContext = null;
@@ -70,7 +70,7 @@ final class ExecuteHandler
 
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
-        $this->streamStartTime = microtime(true);
+        $this->streamStartTime = hrtime(true);
 
         $packet = $this->commandBuilder->buildStmtExecute($stmtId, $params);
         $this->writePacket($packet);
@@ -180,7 +180,6 @@ final class ExecuteHandler
             $this->receivedNewMetadata = true;
         }
 
-        // Removed try-catch here to allow IncompleteBufferException to bubble up
         $catalog = $this->readStringGivenLength($reader, (int)$firstByte);
         $schema = $reader->readLengthEncodedStringOrNull() ?? '';
         $table = $reader->readLengthEncodedStringOrNull() ?? '';
@@ -225,10 +224,12 @@ final class ExecuteHandler
             }
 
             if ($this->streamContext !== null) {
+                $duration = (hrtime(true) - $this->streamStartTime) / 1e9;
+                
                 $stats = new StreamStats(
                     rowCount: $this->streamedRowCount,
                     columnCount: \count($this->columnDefinitions),
-                    duration: microtime(true) - $this->streamStartTime
+                    duration: $duration
                 );
 
                 if ($this->streamContext->onComplete !== null) {
