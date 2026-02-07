@@ -4,32 +4,41 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use function Hibla\await;
+
+use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
-use IteratorAggregate;
 use SplQueue;
-use Throwable;
 
-use function Hibla\await;
+use Throwable;
 
 /**
  * Provides an asynchronous stream of rows using PHP Generators.
- * 
- * This must not be use diretly.
+ *
+ * @internal This must not be use diretly.
  */
-class RowStream implements IteratorAggregate
+class RowStream implements MysqlRowStream
 {
-    /** @var SplQueue<array|null> Buffer for rows */
+    /**
+     *  @var SplQueue<array<string, mixed>|null>
+     */
     private SplQueue $buffer;
 
-    /** @var Promise|null Pending promise waiting for data */
+    /**
+     * @var Promise<array<string, mixed>|null>|null
+     */
     private ?Promise $waiter = null;
 
-    /** @var Promise Promise that resolves when the underlying connection command is finished */
+    /**
+     * @var Promise<void>
+     */
     private Promise $commandPromise;
 
     private ?StreamStats $stats = null;
+
     private ?Throwable $error = null;
+
     private bool $completed = false;
 
     public function __construct()
@@ -39,7 +48,51 @@ class RowStream implements IteratorAggregate
     }
 
     /**
+     * @return \Generator<int, array<string, mixed>>
+     */
+    public function getIterator(): \Generator
+    {
+        while (true) {
+            if ($this->error !== null) {
+                throw $this->error;
+            }
+
+            if (! $this->buffer->isEmpty()) {
+                yield $this->buffer->dequeue();
+
+                continue;
+            }
+
+            if ($this->completed) {
+                break;
+            }
+
+            /** @var Promise<array<string, mixed>|null> $waiter */
+            $waiter = new Promise();
+            $this->waiter = $waiter;
+
+            /** @var array<string, mixed>|null $row */
+            $row = await($waiter);
+
+            if ($row === null) {
+                break;
+            }
+
+            yield $row;
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getStats(): ?StreamStats
+    {
+        return $this->stats;
+    }
+
+    /**
      * @internal
+     * @param array<string, mixed> $row
      */
     public function push(array $row): void
     {
@@ -80,42 +133,10 @@ class RowStream implements IteratorAggregate
             $this->waiter = null;
             $promise->reject($e);
         }
-        
+
         if ($this->commandPromise->isPending()) {
             $this->commandPromise->reject($e);
         }
-    }
-
-    public function getIterator(): \Generator
-    {
-        while (true) {
-            if ($this->error !== null) {
-                throw $this->error;
-            }
-
-            if (! $this->buffer->isEmpty()) {
-                yield $this->buffer->dequeue();
-                continue;
-            }
-
-            if ($this->completed) {
-                break;
-            }
-
-            $this->waiter = new Promise();
-            $row = await($this->waiter);
-
-            if ($row === null) {
-                break;
-            }
-
-            yield $row;
-        }
-    }
-
-    public function getStats(): ?StreamStats
-    {
-        return $this->stats;
     }
 
     /**
@@ -129,8 +150,12 @@ class RowStream implements IteratorAggregate
     }
 
     /**
+     * @internal
+     *
      * Returns a promise that resolves when the underlying database command is fully complete
      * and the connection is ready to be reused.
+     *
+     * @return Promise<void>
      */
     public function waitForCommand(): Promise
     {

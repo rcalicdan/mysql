@@ -4,43 +4,50 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use Hibla\Mysql\Interfaces\MysqlResult;
+use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Sql\Exceptions\TransactionException;
+use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
+use Hibla\Sql\Result as ResultInterface;
+use Hibla\Sql\Transaction as TransactionInterface;
 
 /**
  * Transaction implementation with automatic pool management.
  *
- * This class is exclusively created by MysqlClient and always manages
- * pooled connections. The connection is automatically released back to
- * the pool on commit/rollback or when the transaction goes out of scope.
- *
  * @internal Created by MysqlClient::beginTransaction() - do not instantiate directly.
  */
-class Transaction
+class Transaction implements TransactionInterface
 {
-    private bool $active = true;
-    private bool $released = false;
-
-    /** @var list<callable(): void> */
+    /**
+     *  @var list<callable(): void>
+     */
     private array $onCommitCallbacks = [];
 
-    /** @var list<callable(): void> */
+    /**
+     *  @var list<callable(): void>
+     */
     private array $onRollbackCallbacks = [];
 
+    private bool $active = true;
+
+    private bool $released = false;
+
     /**
-     * Creates a new transaction with automatic pool management.
-     *
      * @internal Use MysqlClient::beginTransaction() instead.
-     *
-     * @param Connection $connection The database connection
-     * @param PoolManager $pool The pool manager for auto-release
      */
     public function __construct(
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {}
+    ) {
+    }
 
+    /**
+     * {@inheritdoc}
+     *
+     * @return PromiseInterface<MysqlResult>
+     */
     public function query(string $sql, array $params = []): PromiseInterface
     {
         $this->ensureActive();
@@ -49,11 +56,12 @@ class Transaction
             return $this->connection->query($sql);
         }
 
-        /** @var PreparedStatement|null $stmtRef */
+        /** @var PreparedStatementInterface|null $stmtRef */
         $stmtRef = null;
 
         return $this->connection->prepare($sql)
             ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
+                /** @var PreparedStatementInterface $stmtRef */
                 $stmtRef = $stmt;
 
                 return $stmt->execute($params);
@@ -67,11 +75,9 @@ class Transaction
     }
 
     /**
-     * Streams a query row-by-row within the current transaction context.
+     * {@inheritdoc}
      *
-     * @param string $sql
-     * @param array $params
-     * @return PromiseInterface<RowStream>
+     * @return PromiseInterface<MysqlRowStream>
      */
     public function stream(string $sql, array $params = []): PromiseInterface
     {
@@ -86,28 +92,51 @@ class Transaction
                 return $stmt->executeStream($params)
                     ->then(function (RowStream $stream) use ($stmt) {
                         $stream->waitForCommand()->finally($stmt->close(...));
+
                         return $stream;
-                    });
+                    })
+                ;
             })
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
-        return $this->query($sql, $params);
-    }
-
-    public function fetchOne(string $sql, array $params = []): PromiseInterface
-    {
         return $this->query($sql, $params)
-            ->then(fn(Result $result) => $result->fetchOne())
+            ->then(fn (ResultInterface $result) => $result->getAffectedRows())
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
+    public function executeGetId(string $sql, array $params = []): PromiseInterface
+    {
+        return $this->query($sql, $params)
+            ->then(fn (ResultInterface $result) => $result->getLastInsertId())
+        ;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fetchOne(string $sql, array $params = []): PromiseInterface
+    {
+        return $this->query($sql, $params)
+            ->then(fn (ResultInterface $result) => $result->fetchOne())
+        ;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function (Result $result) use ($column) {
+            ->then(function (ResultInterface $result) use ($column) {
                 $row = $result->fetchOne();
                 if ($row === null) {
                     return null;
@@ -118,18 +147,29 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function onCommit(callable $callback): void
     {
         $this->ensureActive();
         $this->onCommitCallbacks[] = $callback;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function onRollback(callable $callback): void
     {
         $this->ensureActive();
         $this->onRollbackCallbacks[] = $callback;
     }
 
+    /**
+     * {@inheritdoc}
+     *
+     * @return PromiseInterface<PreparedStatementInterface>
+     */
     public function prepare(string $sql): PromiseInterface
     {
         $this->ensureActive();
@@ -137,6 +177,9 @@ class Transaction
         return $this->connection->prepare($sql);
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function commit(): PromiseInterface
     {
         $this->ensureActive();
@@ -164,6 +207,9 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function rollback(): PromiseInterface
     {
         $this->ensureActive();
@@ -191,6 +237,9 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function savepoint(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -198,7 +247,7 @@ class Transaction
 
         return $this->connection->query("SAVEPOINT {$escaped}")
             ->then(
-                fn() => null,
+                fn () => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
@@ -210,6 +259,9 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function rollbackTo(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -217,7 +269,7 @@ class Transaction
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
             ->then(
-                fn() => null,
+                fn () => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
@@ -229,6 +281,9 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function releaseSavepoint(string $identifier): PromiseInterface
     {
         $this->ensureActive();
@@ -236,7 +291,7 @@ class Transaction
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
             ->then(
-                fn() => null,
+                fn () => null,
                 function (\Throwable $e) use ($identifier) {
                     throw new TransactionException(
                         "Failed to release savepoint '{$identifier}': " . $e->getMessage(),
@@ -248,31 +303,22 @@ class Transaction
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function isActive(): bool
     {
         return $this->active && ! $this->connection->isClosed();
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function isClosed(): bool
     {
         return $this->connection->isClosed();
     }
 
-    /**
-     * Destructor ensures the connection is released when the transaction
-     * goes out of scope without explicit commit/rollback.
-     */
-    public function __destruct()
-    {
-        $this->releaseConnection();
-    }
-
-    /**
-     * Releases the connection back to the pool.
-     * This is automatically called on commit/rollback.
-     *
-     * @return void
-     */
     private function releaseConnection(): void
     {
         if ($this->released) {
@@ -322,5 +368,14 @@ class Transaction
         }
 
         return '`' . str_replace('`', '``', $identifier) . '`';
+    }
+
+    /**
+     * Destructor ensures the connection is released when the transaction
+     * goes out of scope without explicit commit/rollback.
+     */
+    public function __destruct()
+    {
+        $this->releaseConnection();
     }
 }

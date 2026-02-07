@@ -77,15 +77,16 @@ final class HandshakeHandler
     {
         try {
             $parser = new HandshakeParser();
-            
+
             $frame = $parser->parse($reader, $length, $seq);
 
             if ($frame instanceof ErrPacket) {
                 $exception = new ConnectionException(
-                    "MySQL Connection Error [{$frame->errorCode}]: {$frame->errorMessage}", 
+                    "MySQL Connection Error [{$frame->errorCode}]: {$frame->errorMessage}",
                     $frame->errorCode
                 );
                 $this->promise->reject($exception);
+
                 return;
             }
 

@@ -4,19 +4,25 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use function Hibla\async;
+
+use Hibla\Mysql\Interfaces\MysqlResult;
+use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\PreparedException;
-use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
+use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
 
-use function Hibla\async;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
  * Represents a prepared SQL statement that can be executed multiple times
  * with different parameter values.
+ *
+ * This class must not be instantiated directly.
  */
-class PreparedStatement
+class PreparedStatement implements PreparedStatementInterface
 {
     private bool $isClosed = false;
 
@@ -35,13 +41,13 @@ class PreparedStatement
         public readonly int $numParams,
         public readonly array $columnDefinitions = [],
         public readonly array $paramDefinitions = []
-    ) {}
+    ) {
+    }
 
     /**
-     * Execute the prepared statement with the given parameters (buffered).
+     * {@inheritdoc}
      *
-     * @param array<int, mixed> $params The parameters to bind to the statement.
-     * @return PromiseInterface<Result>
+     * @return PromiseInterface<MysqlResult>
      */
     public function execute(array $params = []): PromiseInterface
     {
@@ -61,12 +67,9 @@ class PreparedStatement
     }
 
     /**
-     * Execute the prepared statement with streaming (memory-efficient).
+     * {@inheritdoc}
      *
-     * Returns a Promise that resolves to an RowStream.
-     *
-     * @param array<int, mixed> $params The parameters to bind to the statement.
-     * @return PromiseInterface<RowStream>
+     * @return PromiseInterface<MysqlRowStream>
      * @throws PreparedException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
@@ -100,14 +103,13 @@ class PreparedStatement
                 $stream->error(...)
             );
 
+            /** @var MysqlRowStream $stream */
             return $stream;
         });
     }
 
     /**
-     * Closes the prepared statement and deallocates it on the server.
-     *
-     * @return PromiseInterface<void>
+     * {@inheritdoc}
      */
     public function close(): PromiseInterface
     {
@@ -122,6 +124,9 @@ class PreparedStatement
 
     /**
      * Normalize parameters (convert booleans to integers).
+     *
+     * @param array<int, mixed> $params
+     * @return array<int, mixed>
      */
     private function normalizeParameters(array $params): array
     {

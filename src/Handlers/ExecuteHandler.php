@@ -225,7 +225,7 @@ final class ExecuteHandler
 
             if ($this->streamContext !== null) {
                 $duration = (hrtime(true) - $this->streamStartTime) / 1e9;
-                
+
                 $stats = new StreamStats(
                     rowCount: $this->streamedRowCount,
                     columnCount: \count($this->columnDefinitions),

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use Hibla\Mysql\Interfaces\MysqlResult;
+
 /**
  * Unified result object for all query types (SELECT, INSERT, UPDATE, DELETE, etc.).
  *
@@ -12,19 +14,21 @@ namespace Hibla\Mysql\Internals;
  * - For SELECT: rows are populated, affectedRows is 0
  * - For INSERT/UPDATE/DELETE: rows are empty, affectedRows > 0
  * - For commands like SET: both are typically 0/empty
+ *
+ * @internal This must not be use diretly.
  */
-class Result implements \IteratorAggregate, \Countable
+class Result implements MysqlResult
 {
     private int $position = 0;
-    private readonly int $rowCount;
+    private readonly int $numRows;
     private readonly int $columnCount;
 
     /**
-     * @param array $rows Result rows (empty for non-SELECT queries)
+     * @param array<int, array<string, mixed>> $rows Result rows (empty for non-SELECT queries)
      * @param int $affectedRows Number of rows affected (0 for SELECT queries)
      * @param int $lastInsertId Last auto-increment ID (0 if not applicable)
      * @param int $warningCount Number of warnings generated
-     * @param array $columns Column names from result set
+     * @param array<int, string> $columns Column names from result set
      */
     public function __construct(
         private readonly array $rows = [],
@@ -33,26 +37,25 @@ class Result implements \IteratorAggregate, \Countable
         private readonly int $warningCount = 0,
         private readonly array $columns = []
     ) {
-        $this->rowCount = \count($this->rows);
-        $this->columnCount = $this->rowCount > 0 ? \count($this->rows[0]) : \count($this->columns);
+        $this->numRows = \count($this->rows);
+        $this->columnCount = $this->numRows > 0 ? \count($this->rows[0]) : \count($this->columns);
     }
 
     /**
-     * Fetches the next row as an associative array.
-     * Returns null if there are no more rows or for non-SELECT queries.
+     * {@inheritdoc}
      */
     public function fetchAssoc(): ?array
     {
-        if ($this->position >= $this->rowCount) {
+        if ($this->position >= $this->numRows) {
             return null;
         }
 
+        /** @var array<string, mixed> */
         return $this->rows[$this->position++];
     }
 
     /**
-     * Fetches all rows as an array of associative arrays.
-     * Returns empty array for non-SELECT queries.
+     * {@inheritdoc}
      */
     public function fetchAll(): array
     {
@@ -60,11 +63,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Fetches a single column from all rows.
-     * Returns empty array for non-SELECT queries.
-     *
-     * @param string|int $column Column name or index
-     * @return array
+     * {@inheritdoc}
      */
     public function fetchColumn(string|int $column = 0): array
     {
@@ -72,7 +71,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Fetches the first row, or null if empty or non-SELECT.
+     * {@inheritdoc}
      */
     public function fetchOne(): ?array
     {
@@ -80,8 +79,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Gets the number of rows affected by INSERT/UPDATE/DELETE operations.
-     * Returns 0 for SELECT queries.
+     * {@inheritdoc}
      */
     public function getAffectedRows(): int
     {
@@ -89,8 +87,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Gets the last inserted auto-increment ID.
-     * Returns 0 if not applicable or for SELECT queries.
+     * {@inheritdoc}
      */
     public function getLastInsertId(): int
     {
@@ -98,7 +95,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Gets the number of warnings generated.
+     * {@inheritdoc}
      */
     public function getWarningCount(): int
     {
@@ -106,8 +103,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Checks if any rows were affected by the operation.
-     * For SELECT queries, use count() or isEmpty() instead.
+     * {@inheritdoc}
      */
     public function hasAffectedRows(): bool
     {
@@ -115,7 +111,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Checks if an auto-increment ID was generated.
+     * {@inheritdoc}
      */
     public function hasLastInsertId(): bool
     {
@@ -123,16 +119,15 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Gets the number of rows returned by SELECT queries.
-     * For non-SELECT queries, returns 0.
+     * {@inheritdoc}
      */
-    public function count(): int
+    public function rowCount(): int
     {
-        return $this->rowCount;
+        return $this->numRows;
     }
 
     /**
-     * Gets the number of columns in the result set.
+     * {@inheritdoc}
      */
     public function getColumnCount(): int
     {
@@ -140,7 +135,7 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Gets column names from the result set.
+     * {@inheritdoc}
      */
     public function getColumns(): array
     {
@@ -148,16 +143,15 @@ class Result implements \IteratorAggregate, \Countable
     }
 
     /**
-     * Checks if the result set is empty (no rows returned).
+     * {@inheritdoc}
      */
     public function isEmpty(): bool
     {
-        return $this->rowCount === 0;
+        return $this->numRows === 0;
     }
 
     /**
-     * Allows iteration in foreach loops.
-     * For non-SELECT queries, returns empty iterator.
+     * {@inheritdoc}
      */
     public function getIterator(): \Traversable
     {

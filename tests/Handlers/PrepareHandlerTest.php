@@ -386,6 +386,7 @@ describe('PrepareHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain('Unexpected packet type in prepare response header'); 
+            ->and($errorMessage)->toContain('Unexpected packet type in prepare response header')
+        ;
     });
 });

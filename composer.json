@@ -11,18 +11,21 @@
     },
     "require": {
         "rcalicdan/mysql-binary-protocol": "dev-main",
-        "hiblaphp/event-loop":"dev-main",
-        "hiblaphp/promise":"dev-main",
-        "hiblaphp/stream":"dev-main",
-        "hiblaphp/socket":"dev-main",
-        "hiblaphp/async":"dev-main",
-        "hiblaphp/cancellation":"dev-main",
+        "hiblaphp/event-loop": "dev-main",
+        "hiblaphp/promise": "dev-main",
+        "hiblaphp/stream": "dev-main",
+        "hiblaphp/socket": "dev-main",
+        "hiblaphp/async": "dev-main",
+        "hiblaphp/cancellation": "dev-main",
         "rcalicdan/defer": "^1.0",
-        "hiblaphp/sql": "^1.0"
+        "hiblaphp/sql": "dev-main"
     },
     "require-dev": {
-       "pestphp/pest": "^4.0",
-       "mockery/mockery": "^1.0"
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "laravel/pint": "^1.0",
+        "pestphp/pest": "^4.0",
+        "mockery/mockery": "^1.0"
     },
     "config": {
         "allow-plugins": {
@@ -33,6 +36,7 @@
     "prefer-stable": true,
     "scripts": {
         "test": "vendor/bin/pest",
-        "format": "vendor/bin/pint"
+        "format": "vendor/bin/pint",
+        "analyze": "vendor/bin/phpstan analyse"
     }
 }

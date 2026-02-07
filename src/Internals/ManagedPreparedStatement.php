@@ -4,39 +4,41 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use Hibla\Mysql\Interfaces\MysqlResult;
+use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\Manager\PoolManager;
-use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
+use Hibla\Sql\Exceptions\PreparedException;
+use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
 
 /**
  * A wrapper around PreparedStatement that manages connection lifecycle.
  *
  * This class automatically releases the connection back to the pool when
  * the statement is closed or goes out of scope.
+ *
+ * this must not be instantiated directly
  */
-class ManagedPreparedStatement
+class ManagedPreparedStatement implements PreparedStatementInterface
 {
     private bool $isReleased = false;
 
     /**
-     * @param PreparedStatement $statement The underlying prepared statement
+     * @param PreparedStatementInterface $statement The underlying prepared statement
      * @param Connection $connection The connection this statement belongs to
      * @param PoolManager $pool The pool to release the connection back to
      */
     public function __construct(
-        private readonly PreparedStatement $statement,
+        private readonly PreparedStatementInterface $statement,
         private readonly Connection $connection,
         private readonly PoolManager $pool
     ) {
     }
 
     /**
-     * Execute the prepared statement with the given parameters (buffered).
+     * {@inheritdoc}
      *
-     * @param array<int, mixed> $params The parameters to bind to the statement
-     * @return PromiseInterface<Result>
-     * @throws \RuntimeException If the statement is closed
-     * @throws \InvalidArgumentException If parameter count doesn't match
+     * @return PromiseInterface<MysqlResult>
      */
     public function execute(array $params = []): PromiseInterface
     {
@@ -44,26 +46,20 @@ class ManagedPreparedStatement
     }
 
     /**
-     * Execute the prepared statement with streaming (memory-efficient).
+     * {@inheritdoc}
      *
-     * @param array<int, mixed> $params The parameters to bind to the statement
-     * 
-     * @return PromiseInterface<StreamStats>
-     * @throws \RuntimeException If the statement is closed
+     * @return PromiseInterface<MysqlRowStream>
+     * @throws PreparedException If the statement is closed
      * @throws \InvalidArgumentException If parameter count doesn't match
      */
     public function executeStream(
-        array $params,
+        array $params = [],
     ): PromiseInterface {
         return $this->statement->executeStream($params);
     }
 
     /**
-     * Closes the prepared statement and releases the connection back to the pool.
-     *
-     * This method is idempotent and safe to call multiple times.
-     *
-     * @return PromiseInterface<void>
+     * {@inheritdoc}
      */
     public function close(): PromiseInterface
     {

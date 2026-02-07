@@ -4,24 +4,26 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql;
 
-use function Hibla\async;
-use function Hibla\await;
-
 use Hibla\Cache\ArrayCache;
-use Hibla\Mysql\Enums\IsolationLevel;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
-use Hibla\Mysql\Internals\RowStream;
+use Hibla\Mysql\Interfaces\MysqlResult;
+use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\ManagedPreparedStatement;
 use Hibla\Mysql\Internals\PreparedStatement;
-use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\Internals\Transaction;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
-use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
+use Hibla\Sql\IsolationLevelInterface;
+use Hibla\Sql\Result as ResultInterface;
+use Hibla\Sql\SqlClientInterface;
+use Hibla\Sql\Transaction as TransactionInterface;
+
+use function Hibla\async;
+use function Hibla\await;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -30,21 +32,22 @@ use Hibla\Promise\Promise;
  * Each instance is completely independent, allowing true multi-database support
  * without global state.
  */
-final class MysqlClient
+final class MysqlClient implements SqlClientInterface
 {
-    /** @var PoolManager|null Connection pool instance for this client */
+    /**
+     * @var PoolManager|null
+     */
     private ?PoolManager $pool = null;
 
-    /** @var bool Tracks initialization state of this instance */
-    private bool $isInitialized = false;
-
-    /** @var \WeakMap<Connection, ArrayCache>|null Statement caches per connection */
+    /**
+     *  @var \WeakMap<Connection, ArrayCache>|null
+     */
     private ?\WeakMap $statementCaches = null;
 
-    /** @var int Maximum number of prepared statements to cache per connection */
     private int $statementCacheSize;
 
-    /** @var bool Whether statement caching is enabled */
+    private bool $isInitialized = false;
+
     private bool $enableStatementCache;
 
     /**
@@ -95,12 +98,7 @@ final class MysqlClient
     }
 
     /**
-     * Prepares a SQL statement for multiple executions.
-     *
-     * @param string $sql SQL query with ? placeholders
-     * @return PromiseInterface<ManagedPreparedStatement>
-     *
-     * @throws NotInitializedException If this instance is not initialized
+     * {@inheritdoc}
      */
     public function prepare(string $sql): PromiseInterface
     {
@@ -128,11 +126,9 @@ final class MysqlClient
     }
 
     /**
-     * Executes any SQL statement and returns full Result object.
+     * {@inheritdoc}
      *
-     * @param string $sql SQL statement to execute
-     * @param array<int, mixed> $params Optional parameters
-     * @return PromiseInterface<Result>
+     * @return PromiseInterface<MysqlResult>
      */
     public function query(string $sql, array $params = []): PromiseInterface
     {
@@ -180,59 +176,42 @@ final class MysqlClient
     }
 
     /**
-     * Executes a SQL statement and returns the number of affected rows.
-     *
-     * @param string $sql SQL statement to execute
-     * @param array<int, mixed> $params Optional parameters
-     * @return PromiseInterface<int>
+     * {@inheritdoc}
      */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(Result $result) => $result->getAffectedRows())
+            ->then(fn(ResultInterface $result) => $result->getAffectedRows())
         ;
     }
 
     /**
-     * Executes a SQL statement and returns the last inserted auto-increment ID.
-     *
-     * @param string $sql SQL statement to execute
-     * @param array<int, mixed> $params Optional parameters
-     * @return PromiseInterface<int>
+     * {@inheritdoc}
      */
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(Result $result) => $result->getLastInsertId())
+            ->then(fn(ResultInterface $result) => $result->getLastInsertId())
         ;
     }
 
     /**
-     * Executes a SELECT query and returns the first matching row.
-     *
-     * @param string $sql SQL query to execute
-     * @param array<int, mixed> $params Optional parameters
-     * @return PromiseInterface<array<string, mixed>|null>
+     * {@inheritdoc}
      */
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(Result $result) => $result->fetchOne())
+            ->then(fn(ResultInterface $result) => $result->fetchOne())
         ;
     }
 
     /**
-     * Executes a query and returns a single column value from the first row.
-     *
-     * @param string $sql SQL query to execute
-     * @param string|int $column Column name or index (default: 0)
-     * @param array<int, mixed> $params Optional parameters
-     * @return PromiseInterface<mixed>
+     * {@inheritdoc}
      */
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(function (Result $result) use ($column) {
+            ->then(function (ResultInterface $result) use ($column) {
                 $row = $result->fetchOne();
                 if ($row === null) {
                     return null;
@@ -244,32 +223,12 @@ final class MysqlClient
     }
 
     /**
-     * Streams a SELECT query row-by-row without buffering in memory.
+     * {@inheritdoc}
      *
      * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
      * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
      *
-     * This method is ideal for processing large result sets that may exceed memory.
-     * It returns a Promise that resolves to an iterable RowStream object.
-     *
-     * Example:
-     * ```php
-     * // Non-prepared stream
-     * $stream1 = await($client->stream("SELECT * FROM logs"));
-     *
-     * // Prepared stream
-     * $stream2 = await($client->stream("SELECT * FROM logs WHERE level = ?", ['error']));
-     *
-     * foreach ($stream2 as $row) {
-     *     // ... process row
-     * }
-     * ```
-     *
-     * @param string $sql The SQL SELECT query to execute, with ? placeholders if params are used.
-     * @param array<int, mixed> $params Optional parameters to bind. If provided, a prepared statement is used.
-     * @return PromiseInterface<RowStream> A promise resolving to the stream object.
-     *
-     * @throws NotInitializedException If this instance is not initialized.
+     * @return PromiseInterface<MysqlRowStream>
      */
     public function stream(string $sql, array $params = []): PromiseInterface
     {
@@ -290,37 +249,29 @@ final class MysqlClient
                 }
 
                 return $streamPromise->then(
-                    function (RowStream $stream) use ($conn, $pool) {
-                        $stream->waitForCommand()->finally(fn() => $pool->release($conn));
+                    function (MysqlRowStream $stream) use ($conn, $pool) {
+                        if ($stream instanceof Internals\RowStream) {
+                            $stream->waitForCommand()->finally(fn() => $pool->release($conn));
+                        } else {
+                            $pool->release($conn);
+                        }
+
                         return $stream;
                     },
                     function (\Throwable $e) use ($conn, $pool) {
                         $pool->release($conn);
+
                         throw $e;
                     }
                 );
-            });
+            })
+        ;
     }
 
     /**
-     * Begins a database transaction with automatic connection pool management.
-     *
-     * Returns a Transaction that automatically releases the connection
-     * back to the pool when commit() or rollback() is called.
-     *
-     * Example:
-     * ```php
-     * $tx = await($client->beginTransaction());
-     * await($tx->query('INSERT INTO users (name) VALUES (?)', ['Alice']));
-     * await($tx->commit()); // Auto-releases connection to pool
-     * ```
-     *
-     * @param IsolationLevel|null $isolationLevel Optional transaction isolation level
-     * @return PromiseInterface<Transaction>
-     *
-     * @throws NotInitializedException If this instance is not initialized
+     * {@inheritdoc}
      */
-    public function beginTransaction(?IsolationLevel $isolationLevel = null): PromiseInterface
+    public function beginTransaction(?IsolationLevelInterface $isolationLevel = null): PromiseInterface
     {
         $pool = $this->getPool();
         $connection = null;
@@ -329,9 +280,10 @@ final class MysqlClient
             ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
                 $connection = $conn;
 
-                $sql = $isolationLevel !== null
-                    ? "SET TRANSACTION ISOLATION LEVEL {$isolationLevel->value}; START TRANSACTION"
-                    : 'START TRANSACTION';
+                $sql = 'START TRANSACTION';
+                if ($isolationLevel !== null) {
+                    $sql = "SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}; START TRANSACTION";
+                }
 
                 return $conn->query($sql)
                     ->then(function () use ($conn, $pool) {
@@ -350,22 +302,14 @@ final class MysqlClient
     }
 
     /**
-     * Executes a callback within a database transaction with automatic management and retries.
+     * {@inheritdoc}
      *
-     * @template TResult
-     *
-     * @param callable(Transaction): (TResult) $callback
-     * @param int $attempts Number of times to attempt the transaction (default: 1)
-     * @param IsolationLevel|null $isolationLevel
-     * @return PromiseInterface<TResult>
-     *
-     * @throws NotInitializedException
      * @throws \Throwable The final exception if all attempts fail
      */
     public function transaction(
         callable $callback,
         int $attempts = 1,
-        ?IsolationLevel $isolationLevel = null
+        ?IsolationLevelInterface $isolationLevel = null
     ): PromiseInterface {
         if ($attempts < 1) {
             throw new \InvalidArgumentException('Attempts must be at least 1');
@@ -378,7 +322,7 @@ final class MysqlClient
                 $tx = null;
 
                 try {
-                    /** @var Transaction $tx */
+                    /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
                     $result = await(async(fn() => $callback($tx)));
@@ -408,9 +352,7 @@ final class MysqlClient
     }
 
     /**
-     * Performs a health check on all idle connections in the pool.
-     *
-     * @return PromiseInterface<array<string, int>>
+     * {@inheritdoc}
      *
      * @throws NotInitializedException If this instance is not initialized
      */
@@ -420,9 +362,7 @@ final class MysqlClient
     }
 
     /**
-     * Gets statistics about this instance's connection pool.
-     *
-     * @return array<string, int|bool>
+     * {@inheritdoc}
      *
      * @throws NotInitializedException If this instance is not initialized
      */
@@ -437,9 +377,7 @@ final class MysqlClient
     }
 
     /**
-     * Clears the prepared statement cache for all connections.
-     *
-     * @return void
+     * {@inheritdoc}
      */
     public function clearStatementCache(): void
     {
@@ -449,9 +387,7 @@ final class MysqlClient
     }
 
     /**
-     * Closes all connections and shuts down the pool.
-     *
-     * @return void
+     * {@inheritdoc}
      */
     public function close(): void
     {

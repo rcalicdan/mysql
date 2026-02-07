@@ -104,7 +104,8 @@ describe('QueryHandler', function () {
         Loop::run();
 
         expect($rejected)->toBeTrue()
-            ->and($errorMessage)->toContain("Table 'test.nonexistent' doesn't exist");
+            ->and($errorMessage)->toContain("Table 'test.nonexistent' doesn't exist")
+        ;
     });
 
     it('handles streaming mode with onRow callback', function () {
