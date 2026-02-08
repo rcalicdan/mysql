@@ -34,26 +34,46 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
  * - Streaming: Rows delivered via callback with StreamStats result
  *
  * @internal
- * @package Hibla\Mysql\Handlers
  */
 final class ExecuteHandler
 {
-    private array $rows = [];
-    private array $columnDefinitions = [];
     private int $sequenceId = 0;
+
     private int $streamedRowCount = 0;
-    private int $streamStartTime = 0;
+
+    private float $streamStartTime = 0.0;
+
     private bool $receivedNewMetadata = false;
+
     private ExecuteState $state = ExecuteState::HEADER;
+
     private ?StreamContext $streamContext = null;
+
+    /**
+     *  @var Promise<Result|StreamStats>|null 
+     */
     private ?Promise $currentPromise = null;
+
+    /**
+     *  @var array<int, array<string, mixed>> 
+     */
+    private array $rows = [];
+
+    /**
+     *  @var array<int, ColumnDefinition> 
+     */
+    private array $columnDefinitions = [];
 
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
+    /**
+     * @param array<int, mixed> $params
+     * @param array<int, ColumnDefinition> $columnDefinitions
+     * @param Promise<Result|StreamStats> $promise
+     */
     public function start(
         int $stmtId,
         array $params,
@@ -70,9 +90,9 @@ final class ExecuteHandler
 
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
-        $this->streamStartTime = hrtime(true);
+        $this->streamStartTime = (float) hrtime(true);
 
-        $packet = $this->commandBuilder->buildStmtExecute($stmtId, $params);
+        $packet = $this->commandBuilder->buildStmtExecute($stmtId, array_values($params));
         $this->writePacket($packet);
     }
 
@@ -87,10 +107,9 @@ final class ExecuteHandler
                 ExecuteState::ROWS => $this->handleRow($reader, $length),
             };
         } catch (IncompleteBufferException $e) {
-            // Crucial: Let this bubble up so the packet reader knows to wait for more data.
             throw $e;
         } catch (\Throwable $e) {
-            if (! $e instanceof QueryException && ! $e instanceof ConstraintViolationException) {
+            if (! $e instanceof QueryException) {
                 $e = new QueryException(
                     'Failed to execute prepared statement: ' . $e->getMessage(),
                     (int)$e->getCode(),
@@ -102,6 +121,7 @@ final class ExecuteHandler
                 try {
                     ($this->streamContext->onError)($e);
                 } catch (\Throwable $callbackError) {
+                    // Ignore errors in error handler
                 }
             }
 
@@ -110,6 +130,7 @@ final class ExecuteHandler
             try {
                 $reader->readRestOfPacketString();
             } catch (\Throwable $t) {
+                // Ignore cleanup errors
             }
 
             return true;
@@ -137,7 +158,8 @@ final class ExecuteHandler
                 rows: [],
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
-                warningCount: $frame->warnings
+                warningCount: $frame->warnings,
+                columns: []
             );
             $this->currentPromise?->resolve($result);
 
@@ -224,7 +246,7 @@ final class ExecuteHandler
             }
 
             if ($this->streamContext !== null) {
-                $duration = (hrtime(true) - $this->streamStartTime) / 1e9;
+                $duration = ((float)hrtime(true) - $this->streamStartTime) / 1e9;
 
                 $stats = new StreamStats(
                     rowCount: $this->streamedRowCount,
@@ -236,12 +258,13 @@ final class ExecuteHandler
                     try {
                         ($this->streamContext->onComplete)($stats);
                     } catch (\Throwable $e) {
+                        // Ignore completion handler errors
                     }
                 }
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $columns = array_map(fn ($c) => $c->name, $this->columnDefinitions);
+                $columns = array_map(fn(ColumnDefinition $c) => $c->name, $this->columnDefinitions);
                 $result = new Result(
                     rows: $this->rows,
                     affectedRows: 0,
@@ -256,7 +279,7 @@ final class ExecuteHandler
         }
 
         if ($firstByte === PacketType::ERR) {
-            $errorCode = $reader->readFixedInteger(2);
+            $errorCode = (int)$reader->readFixedInteger(2);
             $reader->readFixedString(1);
             $sqlState = $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
@@ -270,6 +293,7 @@ final class ExecuteHandler
                 try {
                     ($this->streamContext->onError)($exception);
                 } catch (\Throwable $e) {
+                    // Ignore error handler errors
                 }
             }
 
@@ -280,7 +304,7 @@ final class ExecuteHandler
 
         if ($firstByte !== PacketType::OK) {
             throw new QueryException(
-                'Invalid binary row packet: expected 0x00, got 0x' . dechex($firstByte),
+                'Invalid binary row packet: expected 0x00, got 0x' . dechex((int)$firstByte),
                 0
             );
         }
@@ -308,6 +332,7 @@ final class ExecuteHandler
         }
 
         $assocRow = [];
+        /** @var array<string, int> $nameCounts */
         $nameCounts = [];
 
         foreach ($values as $index => $val) {
@@ -315,7 +340,7 @@ final class ExecuteHandler
 
             if (isset($nameCounts[$colName])) {
                 $suffix = $nameCounts[$colName]++;
-                $colName .= $suffix;
+                $colName .= (string) $suffix;
             } else {
                 $nameCounts[$colName] = 1;
             }
@@ -341,9 +366,6 @@ final class ExecuteHandler
         return false;
     }
 
-    /**
-     * Creates appropriate exception based on MySQL error code.
-     */
     private function createExceptionFromError(int $errorCode, string $message): \Throwable
     {
         $constraintErrors = [
@@ -394,8 +416,8 @@ final class ExecuteHandler
             MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
             MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4),
-            MysqlType::FLOAT => unpack('f', $reader->readFixedString(4))[1],
-            MysqlType::DOUBLE => unpack('d', $reader->readFixedString(8))[1],
+            MysqlType::FLOAT => ($u = unpack('f', $reader->readFixedString(4))) !== false ? $u[1] : 0.0,
+            MysqlType::DOUBLE => ($u = unpack('d', $reader->readFixedString(8))) !== false ? $u[1] : 0.0,
             MysqlType::DATE,
             MysqlType::DATETIME,
             MysqlType::TIMESTAMP => $this->readBinaryDateTime($reader, $column->type),
@@ -405,10 +427,10 @@ final class ExecuteHandler
 
         if (
             \in_array($column->type, [MysqlType::TINY, MysqlType::SHORT, MysqlType::INT24, MysqlType::LONG], true)
-            && ! ($column->flags & ColumnFlags::UNSIGNED_FLAG)
+            && ($column->flags & ColumnFlags::UNSIGNED_FLAG) === 0
         ) {
+            $val = is_numeric($val) ? (int)$val : 0;
 
-            $val = (int)$val;
             switch ($column->type) {
                 case MysqlType::TINY:
                     if ($val >= DataTypeBounds::TINYINT_SIGN_BIT) {
@@ -417,7 +439,6 @@ final class ExecuteHandler
 
                     break;
                 case MysqlType::SHORT:
-                case MysqlType::YEAR:
                     if ($val >= DataTypeBounds::SMALLINT_SIGN_BIT) {
                         $val -= DataTypeBounds::SMALLINT_RANGE;
                     }
@@ -445,21 +466,27 @@ final class ExecuteHandler
     {
         $bytes = $reader->readFixedString(8);
 
-        if ($column->flags & ColumnFlags::UNSIGNED_FLAG) {
+        if (($column->flags & ColumnFlags::UNSIGNED_FLAG) !== 0) {
             $val = hexdec(bin2hex(strrev($bytes)));
             if (\is_float($val)) {
                 return number_format($val, 0, '', '');
             }
 
-            return (int)$val;
+            return $val;
         }
 
         $parts = unpack('V2', $bytes);
+        if ($parts === false) {
+            $parts = [1 => 0, 2 => 0];
+        }
 
-        return ($parts[2] << 32) | $parts[1];
+        $upper = isset($parts[2]) && is_numeric($parts[2]) ? (int)$parts[2] : 0;
+        $lower = isset($parts[1]) && is_numeric($parts[1]) ? (int)$parts[1] : 0;
+
+        return ($upper << 32) | $lower;
     }
 
-    private function readBinaryDateTime(PayloadReader $reader, int $type): ?string
+    private function readBinaryDateTime(PayloadReader $reader, int $type): string
     {
         $length = $reader->readFixedInteger(1);
 
@@ -498,7 +525,7 @@ final class ExecuteHandler
         return $date;
     }
 
-    private function readBinaryTime(PayloadReader $reader): ?string
+    private function readBinaryTime(PayloadReader $reader): string
     {
         $length = $reader->readFixedInteger(1);
 
@@ -506,17 +533,17 @@ final class ExecuteHandler
             return '00:00:00';
         }
 
-        $isNegative = $reader->readFixedInteger(1);
-        $days = $reader->readFixedInteger(4);
-        $hour = $reader->readFixedInteger(1);
-        $min = $reader->readFixedInteger(1);
-        $sec = $reader->readFixedInteger(1);
+        $isNegative = (int)$reader->readFixedInteger(1);
+        $days = (int)$reader->readFixedInteger(4);
+        $hour = (int)$reader->readFixedInteger(1);
+        $min = (int)$reader->readFixedInteger(1);
+        $sec = (int)$reader->readFixedInteger(1);
 
         $totalHours = $days * 24 + $hour;
 
         $time = \sprintf(
             '%s%02d:%02d:%02d',
-            $isNegative ? '-' : '',
+            $isNegative !== 0 ? '-' : '',
             $totalHours,
             $min,
             $sec

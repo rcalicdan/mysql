@@ -15,6 +15,8 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 final class PingHandler
 {
     private int $sequenceId = 0;
+
+    /** @var Promise<bool>|null */
     private ?Promise $currentPromise = null;
 
     public function __construct(
@@ -22,6 +24,9 @@ final class PingHandler
     ) {
     }
 
+    /**
+     * @param Promise<bool> $promise
+     */
     public function start(Promise $promise): void
     {
         $this->currentPromise = $promise;

@@ -24,9 +24,9 @@ final class CommandRequest
 
     /**
      * @param string $type The type of command (one of the TYPE_* constants)
-     * @param Promise $promise The promise to resolve/reject when command completes
+     * @param Promise<mixed> $promise The promise to resolve/reject when command completes
      * @param string $sql The SQL query string (for query/prepare/stream commands)
-     * @param array $params Parameters for prepared statement execution
+     * @param array<mixed> $params Parameters for prepared statement execution
      * @param int $statementId The statement ID (for execute/close commands)
      * @param mixed $context Additional context data (e.g., StreamContext for streaming)
      */

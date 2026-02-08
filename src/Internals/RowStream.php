@@ -10,18 +10,17 @@ use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use SplQueue;
-
 use Throwable;
 
 /**
  * Provides an asynchronous stream of rows using PHP Generators.
  *
- * @internal This must not be use diretly.
+ * @internal This must not be used directly.
  */
 class RowStream implements MysqlRowStream
 {
     /**
-     *  @var SplQueue<array<string, mixed>|null>
+     * @var SplQueue<array<string, mixed>>
      */
     private SplQueue $buffer;
 
@@ -43,8 +42,13 @@ class RowStream implements MysqlRowStream
 
     public function __construct()
     {
-        $this->buffer = new SplQueue();
-        $this->commandPromise = new Promise();
+        /** @var SplQueue<array<string, mixed>> $buffer */
+        $buffer = new SplQueue();
+        $this->buffer = $buffer;
+
+        /** @var Promise<void> $commandPromise */
+        $commandPromise = new Promise();
+        $this->commandPromise = $commandPromise;
     }
 
     /**

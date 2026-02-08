@@ -4,26 +4,27 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use Hibla\Stream\Traits\PromiseHelperTrait;
 use function Hibla\async;
 
 use Hibla\Mysql\Interfaces\MysqlResult;
 use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamContext;
+use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
-use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\PreparedException;
 use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
-
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
- * Represents a prepared SQL statement that can be executed multiple times
- * with different parameter values.
+ * Represents a prepared SQL statement that can be executed multiple times.
  *
- * This class must not be instantiated directly.
+ * @internal
  */
 class PreparedStatement implements PreparedStatementInterface
 {
+    use PromiseHelperTrait;
+
     private bool $isClosed = false;
 
     /**
@@ -41,12 +42,12 @@ class PreparedStatement implements PreparedStatementInterface
         public readonly int $numParams,
         public readonly array $columnDefinitions = [],
         public readonly array $paramDefinitions = []
-    ) {
-    }
+    ) {}
 
     /**
      * {@inheritdoc}
      *
+     * @param array<int, mixed> $params
      * @return PromiseInterface<MysqlResult>
      */
     public function execute(array $params = []): PromiseInterface
@@ -69,9 +70,8 @@ class PreparedStatement implements PreparedStatementInterface
     /**
      * {@inheritdoc}
      *
+     * @param array<int, mixed> $params
      * @return PromiseInterface<MysqlRowStream>
-     * @throws PreparedException If the statement is closed
-     * @throws \InvalidArgumentException If parameter count doesn't match
      */
     public function executeStream(array $params = []): PromiseInterface
     {
@@ -85,7 +85,7 @@ class PreparedStatement implements PreparedStatementInterface
             );
         }
 
-        return async(function () use ($params) {
+        return async(function () use ($params): MysqlRowStream {
             $stream = new RowStream();
 
             $context = new StreamContext(
@@ -96,30 +96,41 @@ class PreparedStatement implements PreparedStatementInterface
 
             $normalizedParams = $this->normalizeParameters($params);
 
+            /** @var PromiseInterface<StreamStats> $commandPromise */
             $commandPromise = $this->connection->executeStream($this, $normalizedParams, $context);
 
             $commandPromise->then(
                 $stream->markCommandFinished(...),
-                $stream->error(...)
+                function (mixed $e) use ($stream): void {
+                    if ($e instanceof \Throwable) {
+                        $stream->error($e);
+                    } else {
+                        $stream->error(new \RuntimeException('Stream failed with non-throwable error.'));
+                    }
+                }
             );
 
-            /** @var MysqlRowStream $stream */
             return $stream;
         });
     }
 
     /**
      * {@inheritdoc}
+     * 
+     * @return PromiseInterface<void>
      */
     public function close(): PromiseInterface
     {
         if ($this->isClosed) {
-            return Promise::resolved();
+            return $this->createResolvedVoidPromise();
         }
 
         $this->isClosed = true;
 
-        return $this->connection->closeStatement($this->id);
+        /** @var PromiseInterface<void> $promise */
+        $promise = $this->connection->closeStatement($this->id);
+
+        return $promise;
     }
 
     /**

@@ -7,7 +7,7 @@ namespace Hibla\Mysql\ValueObjects;
 final class StreamContext
 {
     /**
-     * @param callable(array): void $onRow Callback to handle each row
+     * @param callable(array<string, mixed>): void $onRow Callback to handle each row
      * @param callable(StreamStats): void|null $onComplete Callback when streaming completes
      * @param callable(\Throwable): void|null $onError Callback for error handling
      */

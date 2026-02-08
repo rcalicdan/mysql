@@ -42,6 +42,7 @@ class ManagedPreparedStatement implements PreparedStatementInterface
      */
     public function execute(array $params = []): PromiseInterface
     {
+        /** @var PromiseInterface<MysqlResult>*/
         return $this->statement->execute($params);
     }
 
@@ -55,6 +56,7 @@ class ManagedPreparedStatement implements PreparedStatementInterface
     public function executeStream(
         array $params = [],
     ): PromiseInterface {
+        /** @var PromiseInterface<MysqlRowStream>  */
         return $this->statement->executeStream($params);
     }
 

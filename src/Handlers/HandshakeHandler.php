@@ -25,7 +25,7 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
 /**
  * Handles MySQL handshake protocol including SSL/TLS upgrade.
- *
+ *  
  * MySQL uses STARTTLS protocol which requires upgrading an existing
  * plain-text connection to encrypted during the handshake phase.
  * This is different from most protocols which use TLS from connection start.
@@ -44,15 +44,23 @@ final class HandshakeHandler
     private int $serverCapabilities = 0;
     private int $sequenceId = 0;
     private bool $isSslEnabled = false;
+
+    /** @var Promise<int> */
     private Promise $promise;
 
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly ConnectionParams $params
     ) {
-        $this->promise = new Promise();
+        /** @var Promise<int> $promise */
+        $promise = new Promise();
+
+        $this->promise = $promise;
     }
 
+    /**
+     * @return PromiseInterface<int>
+     */
     public function start(UncompressedPacketReader $packetReader): PromiseInterface
     {
         if ($packetReader->hasPacket()) {
@@ -101,10 +109,10 @@ final class HandshakeHandler
 
             $clientCaps = $this->calculateCapabilities();
 
-            if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL)) {
+            if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) !== 0) {
                 $this->performSslUpgrade($clientCaps);
             } else {
-                if ($this->params->useSsl() && ! ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL)) {
+                if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) === 0) {
                     $this->promise->reject(new ConnectionException(
                         'SSL/TLS connection requested but server does not support SSL',
                         0
@@ -173,28 +181,35 @@ final class HandshakeHandler
                 'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
             ];
 
-            if ($this->params->sslCa) {
+            if ($this->params->sslCa !== null) {
                 $sslOptions['cafile'] = $this->params->sslCa;
             }
 
-            if ($this->params->sslCert) {
+            if ($this->params->sslCert !== null) {
                 $sslOptions['local_cert'] = $this->params->sslCert;
             }
 
-            if ($this->params->sslKey) {
+            if ($this->params->sslKey !== null) {
                 $sslOptions['local_pk'] = $this->params->sslKey;
             }
 
-            $this->socket->enableEncryption($sslOptions)->then(
+            /** @var PromiseInterface<mixed> $encryptionPromise */
+            $encryptionPromise = $this->socket->enableEncryption($sslOptions);
+
+            $encryptionPromise->then(
                 function () use ($clientCaps) {
                     $this->isSslEnabled = true;
                     $this->sendAuthResponse($clientCaps);
                 },
-                function ($e) {
+               
+                function (mixed $e) {
+                    $message = $e instanceof \Throwable ? $e->getMessage() : 'Unknown error';
+                    $cause = $e instanceof \Throwable ? $e : null;
+
                     $this->promise->reject(new ConnectionException(
-                        'SSL/TLS handshake failed: ' . $e->getMessage(),
+                        'SSL/TLS handshake failed: ' . $message,
                         0,
-                        $e
+                        $cause
                     ));
                 }
             );
@@ -264,7 +279,7 @@ final class HandshakeHandler
 
     private function handleAuthError(PayloadReader $reader): void
     {
-        $errorCode = $reader->readFixedInteger(2);
+        $errorCode = (int)$reader->readFixedInteger(2);
         $reader->readFixedString(1);
         $sqlState = $reader->readFixedString(5);
         $message = $reader->readRestOfPacketString();

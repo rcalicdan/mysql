@@ -17,22 +17,40 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 final class PrepareHandler
 {
+    /**
+     *  @var array<int, ColumnDefinition> 
+     */
     private array $columnDefinitions = [];
+
+    /**
+     *  @var array<int, ColumnDefinition> 
+     */
     private array $paramDefinitions = [];
-    private int $sequenceId = 0;
-    private int $stmtId = 0;
-    private int $numColumns = 0;
-    private int $numParams = 0;
-    private PrepareState $state = PrepareState::HEADER;
+
+    /**
+     *  @var Promise<PreparedStatement>|null 
+     */
     private ?Promise $currentPromise = null;
+
+    private PrepareState $state = PrepareState::HEADER;
+
+    private int $sequenceId = 0;
+
+    private int $stmtId = 0;
+
+    private int $numColumns = 0;
+
+    private int $numParams = 0;
 
     public function __construct(
         private readonly MysqlConnection $connection,
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
+    /**
+     * @param Promise<PreparedStatement> $promise
+     */
     public function start(string $sql, Promise $promise): void
     {
         $this->state = PrepareState::HEADER;
@@ -75,7 +93,7 @@ final class PrepareHandler
         $firstByte = $reader->readFixedInteger(1);
 
         if ($firstByte === PacketType::ERR) {
-            $code = $reader->readFixedInteger(2);
+            $code = (int)$reader->readFixedInteger(2);
             $reader->readFixedString(1);
             $sqlState = $reader->readFixedString(5);
             $msg = $reader->readRestOfPacketString();
@@ -114,7 +132,7 @@ final class PrepareHandler
         }
 
         throw new PreparedException(
-            'Unexpected packet type in prepare response header: 0x' . dechex($firstByte),
+            'Unexpected packet type in prepare response header: 0x' . dechex((int)$firstByte),
             0
         );
     }
