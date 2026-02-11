@@ -191,10 +191,25 @@ class Connection
      * @param string $sql
      * @return PromiseInterface<RowStream>
      */
-    public function streamQuery(string $sql): PromiseInterface
+    /**
+     * Streams a SELECT query row-by-row using a Generator.
+     *
+     * @param string $sql
+     * @param int $bufferSize Maximum rows to buffer before applying backpressure (default: 100)
+     * @return PromiseInterface<RowStream>
+     */
+    public function streamQuery(string $sql, int $bufferSize = 100): PromiseInterface
     {
-        return async(function () use ($sql) {
-            $stream = new RowStream();
+        return async(function () use ($sql, $bufferSize) {
+            $stream = new RowStream($bufferSize);
+
+            $stream->setBackpressureHandler(function (bool $shouldPause): void {
+                if ($shouldPause) {
+                    $this->pause();
+                } else {
+                    $this->resume();
+                }
+            });
 
             $context = new StreamContext(
                 onRow: $stream->push(...),

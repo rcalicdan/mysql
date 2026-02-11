@@ -72,19 +72,22 @@ class Transaction implements TransactionInterface
     /**
      * {@inheritdoc}
      *
+     * @param string $sql SQL query to stream
+     * @param array<int|string, mixed> $params Query parameters (optional)
+     * @param int $bufferSize Maximum rows to buffer before applying backpressure (default: 100)
      * @return PromiseInterface<MysqlRowStream>
      */
-    public function stream(string $sql, array $params = []): PromiseInterface
+    public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
     {
         $this->ensureActive();
 
         if (\count($params) === 0) {
-            return $this->connection->streamQuery($sql);
+            return $this->connection->streamQuery($sql, $bufferSize);
         }
 
         return $this->connection->prepare($sql)
-            ->then(function (PreparedStatement $stmt) use ($params): PromiseInterface {
-                return $stmt->executeStream($params)
+            ->then(function (PreparedStatement $stmt) use ($params, $bufferSize): PromiseInterface {
+                return $stmt->executeStream($params, $bufferSize)
                     ->then(function (MysqlRowStream $stream) use ($stmt): MysqlRowStream {
                         if ($stream instanceof RowStream) {
                             $stream->waitForCommand()->finally($stmt->close(...));

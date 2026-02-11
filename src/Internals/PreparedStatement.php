@@ -71,9 +71,10 @@ class PreparedStatement implements PreparedStatementInterface
      * {@inheritdoc}
      *
      * @param array<int, mixed> $params
+     * @param int $bufferSize Maximum rows to buffer before applying backpressure (default: 100)
      * @return PromiseInterface<MysqlRowStream>
      */
-    public function executeStream(array $params = []): PromiseInterface
+    public function executeStream(array $params = [], int $bufferSize = 100): PromiseInterface
     {
         if ($this->isClosed) {
             throw new PreparedException('Cannot execute a closed statement.');
@@ -85,8 +86,16 @@ class PreparedStatement implements PreparedStatementInterface
             );
         }
 
-        return async(function () use ($params): MysqlRowStream {
-            $stream = new RowStream();
+        return async(function () use ($params, $bufferSize): MysqlRowStream {
+            $stream = new RowStream($bufferSize);
+
+            $stream->setBackpressureHandler(function (bool $shouldPause): void {
+                if ($shouldPause) {
+                    $this->connection->pause();
+                } else {
+                    $this->connection->resume();
+                }
+            });
 
             $context = new StreamContext(
                 onRow: $stream->push(...),

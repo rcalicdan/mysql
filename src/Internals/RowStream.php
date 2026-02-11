@@ -20,6 +20,11 @@ use Throwable;
 class RowStream implements MysqlRowStream
 {
     /**
+     * Default maximum number of rows to buffer before applying backpressure.
+     */
+    private const DEFAULT_BUFFER_SIZE = 100;
+
+    /**
      * @var SplQueue<array<string, mixed>>
      */
     private SplQueue $buffer;
@@ -40,8 +45,35 @@ class RowStream implements MysqlRowStream
 
     private bool $completed = false;
 
-    public function __construct()
+    /**
+     * Callback for backpressure control (pause/resume socket reading).
+     * 
+     * @var \Closure(bool): void|null
+     */
+    private ?\Closure $onBackpressure = null;
+
+    /**
+     * Maximum number of rows to buffer before pausing socket reading.
+     */
+    private int $maxBufferSize;
+
+    /**
+     * Threshold at which to resume socket reading (typically half of max).
+     */
+    private int $resumeThreshold;
+
+    /**
+     * @param int $bufferSize Maximum number of rows to buffer (default: 100)
+     */
+    public function __construct(int $bufferSize = self::DEFAULT_BUFFER_SIZE)
     {
+        if ($bufferSize < 1) {
+            throw new \InvalidArgumentException('Buffer size must be at least 1');
+        }
+
+        $this->maxBufferSize = $bufferSize;
+        $this->resumeThreshold = (int)($bufferSize / 2);
+
         /** @var SplQueue<array<string, mixed>> $buffer */
         $buffer = new SplQueue();
         $this->buffer = $buffer;
@@ -61,8 +93,15 @@ class RowStream implements MysqlRowStream
                 throw $this->error;
             }
 
-            if (! $this->buffer->isEmpty()) {
-                yield $this->buffer->dequeue();
+            if (!$this->buffer->isEmpty()) {
+                $row = $this->buffer->dequeue();
+
+                // Resume socket reading when buffer drains below threshold
+                if ($this->onBackpressure !== null && $this->buffer->count() < $this->resumeThreshold) {
+                    ($this->onBackpressure)(false);
+                }
+
+                yield $row;
 
                 continue;
             }
@@ -95,6 +134,19 @@ class RowStream implements MysqlRowStream
     }
 
     /**
+     * Sets the backpressure handler for controlling socket flow.
+     *
+     * @internal
+     * @param \Closure(bool): void $handler Callback receiving true to pause, false to resume
+     */
+    public function setBackpressureHandler(\Closure $handler): void
+    {
+        $this->onBackpressure = $handler;
+    }
+
+    /**
+     * Pushes a row into the stream buffer.
+     *
      * @internal
      * @param array<string, mixed> $row
      */
@@ -106,10 +158,17 @@ class RowStream implements MysqlRowStream
             $promise->resolve($row);
         } else {
             $this->buffer->enqueue($row);
+
+            // Apply backpressure when buffer grows too large
+            if ($this->onBackpressure !== null && $this->buffer->count() >= $this->maxBufferSize) {
+                ($this->onBackpressure)(true);
+            }
         }
     }
 
     /**
+     * Marks the stream as complete with final statistics.
+     *
      * @internal
      */
     public function complete(StreamStats $stats): void
@@ -125,6 +184,8 @@ class RowStream implements MysqlRowStream
     }
 
     /**
+     * Marks the stream as failed with an error.
+     *
      * @internal
      */
     public function error(Throwable $e): void
@@ -144,7 +205,9 @@ class RowStream implements MysqlRowStream
     }
 
     /**
-     * @internal Called by Connection when the command is fully finished and state is READY.
+     * Called by Connection when the command is fully finished and state is READY.
+     *
+     * @internal
      */
     public function markCommandFinished(): void
     {
@@ -154,11 +217,10 @@ class RowStream implements MysqlRowStream
     }
 
     /**
-     * @internal
-     *
      * Returns a promise that resolves when the underlying database command is fully complete
      * and the connection is ready to be reused.
      *
+     * @internal
      * @return Promise<void>
      */
     public function waitForCommand(): Promise

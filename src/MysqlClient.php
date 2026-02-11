@@ -233,21 +233,24 @@ final class MysqlClient implements SqlClientInterface
      * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
      * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
      *
+     * @param string $sql SQL query to stream
+     * @param array<int|string, mixed> $params Query parameters (optional)
+     * @param int $bufferSize Maximum rows to buffer before applying backpressure (default: 100)
      * @return PromiseInterface<MysqlRowStream>
      */
-    public function stream(string $sql, array $params = []): PromiseInterface
+    public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
     {
         $pool = $this->getPool();
 
         return $pool->get()
-            ->then(function (Connection $conn) use ($sql, $params, $pool) {
+            ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool) {
 
                 if (\count($params) === 0) {
-                    $streamPromise = $conn->streamQuery($sql);
+                    $streamPromise = $conn->streamQuery($sql, $bufferSize);
                 } else {
                     $streamPromise = $this->getCachedStatement($conn, $sql)
-                        ->then(function (PreparedStatement $stmt) use ($params) {
-                            return $stmt->executeStream($params);
+                        ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
+                            return $stmt->executeStream($params, $bufferSize);
                         });
                 }
 
@@ -442,7 +445,7 @@ final class MysqlClient implements SqlClientInterface
     {
         $caches = $this->statementCaches;
         if ($caches === null) {
-             return $conn->prepare($sql);
+            return $conn->prepare($sql);
         }
 
         if (! $caches->offsetExists($conn)) {
