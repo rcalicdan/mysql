@@ -9,6 +9,7 @@ use Hibla\Mysql\Internals\Connection as MysqlConnection;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
+use Hibla\Socket\Interfaces\ConnectorInterface;
 use InvalidArgumentException;
 use SplQueue;
 use Throwable;
@@ -32,57 +33,51 @@ use Throwable;
 class PoolManager
 {
     /**
-     * @var SplQueue<MysqlConnection> A queue of available, idle connections.
+     * @var SplQueue<MysqlConnection> 
      */
     private SplQueue $pool;
 
     /**
-     * @var SplQueue<Promise<MysqlConnection>> A queue of pending requests (waiters) for a connection.
+     * @var SplQueue<Promise<MysqlConnection>> 
      */
     private SplQueue $waiters;
 
-    /**
-     * @var int The maximum number of concurrent connections allowed.
-     */
     private int $maxSize;
 
-    /**
-     * @var int The current number of active connections (both in pool and in use).
-     */
     private int $activeConnections = 0;
 
     /**
-     * @var ConnectionParams The database connection configuration.
+     * @var ConnectionParams 
      */
     private ConnectionParams $connectionParams;
 
     /**
-     * @var MysqlConnection|null The most recently used or created connection.
+     * @var ConnectorInterface|null
      */
-    private ?MysqlConnection $lastConnection = null;
+    private ?ConnectorInterface $connector;
 
     /**
-     * @var bool Flag indicating if the initial configuration was validated.
+     * @var bool 
      */
     private bool $configValidated = false;
 
     /**
-     * @var int Idle timeout in nanoseconds.
+     * @var int 
      */
     private int $idleTimeoutNanos;
 
     /**
-     * @var int Max lifetime in nanoseconds.
+     * @var int 
      */
     private int $maxLifetimeNanos;
 
     /**
-     * @var array<int, int> Tracks last usage timestamp (hrtime) for each connection.
+     * @var array<int, int> 
      */
     private array $connectionLastUsed = [];
 
     /**
-     * @var array<int, int> Tracks creation timestamp (hrtime) for each connection.
+     * @var array<int, int> 
      */
     private array $connectionCreatedAt = [];
 
@@ -93,6 +88,7 @@ class PoolManager
      * @param int $maxSize The maximum number of connections this pool can manage.
      * @param int $idleTimeout Seconds a connection can stay idle before closure (default: 300 / 5 mins).
      * @param int $maxLifetime Seconds a connection can live in total before rotation (default: 3600 / 1 hour).
+     * @param ConnectorInterface|null $connector Optional custom socket connector instance.
      *
      * @throws InvalidArgumentException If the database configuration is invalid.
      */
@@ -100,7 +96,8 @@ class PoolManager
         ConnectionParams|array|string $config,
         int $maxSize = 10,
         int $idleTimeout = 300,
-        int $maxLifetime = 3600
+        int $maxLifetime = 3600,
+        ?ConnectorInterface $connector = null
     ) {
         $this->connectionParams = match (true) {
             $config instanceof ConnectionParams => $config,
@@ -122,6 +119,7 @@ class PoolManager
 
         $this->configValidated = true;
         $this->maxSize = $maxSize;
+        $this->connector = $connector;
 
         $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
         $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
@@ -179,7 +177,6 @@ class PoolManager
 
             // Resume the connection (re-attach event loop listeners)
             $connection->resume();
-            $this->lastConnection = $connection;
 
             return Promise::resolved($connection);
         }
@@ -188,19 +185,19 @@ class PoolManager
         if ($this->activeConnections < $this->maxSize) {
             $this->activeConnections++;
 
+            /** @var Promise<MysqlConnection> $promise */
             $promise = new Promise();
 
-            MysqlConnection::create($this->connectionParams)
+            MysqlConnection::create($this->connectionParams, $this->connector)
                 ->then(
-                    function (MysqlConnection $connection) use ($promise) {
+                    function (MysqlConnection $connection) use ($promise): void {
                         // Track creation time for Max Lifetime
                         $connId = spl_object_id($connection);
                         $this->connectionCreatedAt[$connId] = hrtime(true);
 
-                        $this->lastConnection = $connection;
                         $promise->resolve($connection);
                     },
-                    function (Throwable $e) use ($promise) {
+                    function (Throwable $e) use ($promise): void {
                         $this->activeConnections--;
                         $promise->reject($e);
                     }
@@ -240,7 +237,6 @@ class PoolManager
         if (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
-            $this->lastConnection = $connection;
             // Connection stays active (resumed) for the waiter
             $promise->resolve($connection);
         } else {
@@ -303,7 +299,6 @@ class PoolManager
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
         $this->activeConnections = 0;
-        $this->lastConnection = null;
 
         $this->connectionLastUsed = [];
         $this->connectionCreatedAt = [];
@@ -316,14 +311,19 @@ class PoolManager
      */
     public function healthCheck(): PromiseInterface
     {
+        /** @var Promise<array<string, int>> $promise */
         $promise = new Promise();
+
         $stats = [
             'total_checked' => 0,
             'healthy' => 0,
             'unhealthy' => 0,
         ];
 
+        /** @var SplQueue<MysqlConnection> $tempQueue */
         $tempQueue = new SplQueue();
+
+        /** @var array<int, PromiseInterface<bool>> $checkPromises */
         $checkPromises = [];
 
         // Check all connections currently in the pool
@@ -336,7 +336,7 @@ class PoolManager
 
             $checkPromises[] = $connection->ping()
                 ->then(
-                    function () use ($connection, $tempQueue, &$stats) {
+                    function () use ($connection, $tempQueue, &$stats): void {
                         $stats['healthy']++;
                         $connection->pause();
 
@@ -345,28 +345,31 @@ class PoolManager
 
                         $tempQueue->enqueue($connection);
                     },
-                    function () use ($connection, &$stats) {
+                    function () use ($connection, &$stats): void {
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                )
-            ;
+                );
         }
 
         // Wait for all pings to complete
         Promise::all($checkPromises)
             ->then(
-                function () use ($promise, $tempQueue, &$stats) {
+                function () use ($promise, $tempQueue, $stats): void {
                     // Return healthy connections back to pool
                     while (! $tempQueue->isEmpty()) {
-                        $this->pool->enqueue($tempQueue->dequeue());
+                        /** @var MysqlConnection $conn */
+                        $conn = $tempQueue->dequeue();
+                        $this->pool->enqueue($conn);
                     }
                     $promise->resolve($stats);
                 },
-                function (Throwable $e) use ($promise, $tempQueue, &$stats) {
+                function (Throwable $e) use ($promise, $tempQueue): void {
                     // Return any remaining connections back to pool
                     while (! $tempQueue->isEmpty()) {
-                        $this->pool->enqueue($tempQueue->dequeue());
+                        /** @var MysqlConnection $conn */
+                        $conn = $tempQueue->dequeue();
+                        $this->pool->enqueue($conn);
                     }
                     $promise->reject($e);
                 }
@@ -407,17 +410,16 @@ class PoolManager
         /** @var Promise<MysqlConnection> $promise */
         $promise = $this->waiters->dequeue();
 
-        MysqlConnection::create($this->connectionParams)
+        MysqlConnection::create($this->connectionParams, $this->connector)
             ->then(
-                function (MysqlConnection $newConnection) use ($promise) {
+                function (MysqlConnection $newConnection) use ($promise): void {
                     // Track creation time for Max Lifetime
                     $connId = spl_object_id($newConnection);
                     $this->connectionCreatedAt[$connId] = hrtime(true);
 
-                    $this->lastConnection = $newConnection;
                     $promise->resolve($newConnection);
                 },
-                function (Throwable $e) use ($promise) {
+                function (Throwable $e) use ($promise): void {
                     $this->activeConnections--;
                     $promise->reject($e);
                 }

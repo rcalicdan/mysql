@@ -11,8 +11,6 @@ use Hibla\Sql\RowStream as RowStreamInterface;
  * Provides an asynchronous stream of rows with access to MySQL-specific StreamStats.
  *
  * This interface should be used when stream metadata is required.
- *
- * @extends RowStreamInterface<int, array<string, mixed>>
  */
 interface MysqlRowStream extends RowStreamInterface
 {

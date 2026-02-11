@@ -70,6 +70,9 @@ class Connection
 
     private ?ExecuteHandler $executeHandler = null;
 
+    /**
+     * @var Promise<self>|null
+     */
     private ?Promise $connectPromise = null;
 
     private ?CommandRequest $currentCommand = null;
@@ -125,7 +128,10 @@ class Connection
         }
 
         $this->state = ConnectionState::CONNECTING;
-        $this->connectPromise = new Promise();
+
+        /** @var Promise<self> $promise */
+        $promise = new Promise();
+        $this->connectPromise = $promise;
         $this->isUserClosing = false;
 
         $connector = $this->connector ?? new Connector([
@@ -143,7 +149,7 @@ class Connection
             $this->handleConnectionError(...)
         );
 
-        return $this->connectPromise;
+        return $promise;
     }
 
     /**
@@ -154,9 +160,7 @@ class Connection
      */
     public function pause(): void
     {
-        if ($this->socket) {
-            $this->socket->pause();
-        }
+        $this->socket?->pause();
     }
 
     /**
@@ -166,9 +170,7 @@ class Connection
      */
     public function resume(): void
     {
-        if ($this->socket) {
-            $this->socket->resume();
-        }
+        $this->socket?->resume();
     }
 
     /**
@@ -179,6 +181,7 @@ class Connection
      */
     public function query(string $sql): PromiseInterface
     {
+        /** @var PromiseInterface<Result> */
         return $this->enqueueCommand(CommandRequest::TYPE_QUERY, $sql);
     }
 
@@ -222,6 +225,7 @@ class Connection
      */
     public function prepare(string $sql): PromiseInterface
     {
+        /** @var PromiseInterface<PreparedStatement> */
         return $this->enqueueCommand(CommandRequest::TYPE_PREPARE, $sql);
     }
 
@@ -232,6 +236,7 @@ class Connection
      */
     public function ping(): PromiseInterface
     {
+        /** @var PromiseInterface<bool> */
         return $this->enqueueCommand(CommandRequest::TYPE_PING);
     }
 
@@ -249,7 +254,7 @@ class Connection
         $this->isUserClosing = true;
         $this->state = ConnectionState::CLOSED;
 
-        if ($this->socket) {
+        if ($this->socket !== null) {
             $this->socket->close();
             $this->socket = null;
         }
@@ -261,14 +266,14 @@ class Connection
         $this->executeHandler = null;
         $this->pingHandler = null;
 
-        if ($this->connectPromise) {
+        if ($this->connectPromise !== null) {
             $this->connectPromise->reject(
                 new ConnectionException('Connection closed before establishing')
             );
             $this->connectPromise = null;
         }
 
-        if ($this->currentCommand) {
+        if ($this->currentCommand !== null) {
             $this->currentCommand->promise->reject(
                 new ConnectionException('Connection closed during command execution')
             );
@@ -309,10 +314,12 @@ class Connection
     }
 
     /**
+     * @param array<int|string, mixed> $params
      * @return PromiseInterface<Result>
      */
     public function executeStatement(PreparedStatement $stmt, array $params): PromiseInterface
     {
+        /** @var PromiseInterface<Result> */
         return $this->enqueueCommand(
             CommandRequest::TYPE_EXECUTE,
             '',
@@ -323,6 +330,7 @@ class Connection
     }
 
     /**
+     * @param array<int|string, mixed> $params
      * @return PromiseInterface<StreamStats>
      */
     public function executeStream(
@@ -332,6 +340,7 @@ class Connection
     ): PromiseInterface {
         $executeContext = new ExecuteStreamContext($stmt, $context);
 
+        /** @var PromiseInterface<StreamStats> */
         return $this->enqueueCommand(
             CommandRequest::TYPE_EXECUTE_STREAM,
             '',
@@ -346,6 +355,7 @@ class Connection
      */
     public function closeStatement(int $stmtId): PromiseInterface
     {
+        /** @var PromiseInterface<void> */
         return $this->enqueueCommand(
             CommandRequest::TYPE_CLOSE_STMT,
             '',
@@ -354,6 +364,10 @@ class Connection
         );
     }
 
+    /**
+     * @param array<int|string, mixed> $params
+     * @return PromiseInterface<mixed>
+     */
     private function enqueueCommand(
         string $type,
         string $sql = '',
@@ -400,7 +414,7 @@ class Connection
     {
         $this->state = ConnectionState::READY;
 
-        if ($this->connectPromise) {
+        if ($this->connectPromise !== null) {
             $this->connectPromise->resolve($this);
             $this->connectPromise = null;
         }
@@ -415,71 +429,101 @@ class Connection
 
         $this->currentCommand = $this->commandQueue->dequeue();
 
-        switch ($this->currentCommand->type) {
+        $command = $this->currentCommand;
+
+        switch ($command->type) {
             case CommandRequest::TYPE_QUERY:
                 $this->state = ConnectionState::QUERYING;
-                $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+                if ($this->queryHandler !== null) {
+                    /** @var Promise<Result> $promise */
+                    $promise = $command->promise;
+                    $this->queryHandler->start($command->sql, $promise);
+                }
 
                 break;
 
             case CommandRequest::TYPE_STREAM_QUERY:
                 $this->state = ConnectionState::QUERYING;
                 /** @var StreamContext $streamContext */
-                $streamContext = $this->currentCommand->context;
-                $this->queryHandler->start($this->currentCommand->sql, $this->currentCommand->promise, $streamContext);
+                $streamContext = $command->context;
+                if ($this->queryHandler !== null) {
+                    /** @var Promise<StreamStats> $promise */
+                    $promise = $command->promise;
+                    $this->queryHandler->start($command->sql, $promise, $streamContext);
+                }
 
                 break;
 
             case CommandRequest::TYPE_PING:
                 $this->state = ConnectionState::PINGING;
-                $this->pingHandler->start($this->currentCommand->promise);
+                if ($this->pingHandler !== null) {
+                    /** @var Promise<bool> $promise */
+                    $promise = $command->promise;
+                    $this->pingHandler->start($promise);
+                }
 
                 break;
 
             case CommandRequest::TYPE_PREPARE:
                 $this->state = ConnectionState::PREPARING;
-                $this->prepareHandler->start($this->currentCommand->sql, $this->currentCommand->promise);
+                if ($this->prepareHandler !== null) {
+                    /** @var Promise<PreparedStatement> $promise */
+                    $promise = $command->promise;
+                    $this->prepareHandler->start($command->sql, $promise);
+                }
 
                 break;
 
             case CommandRequest::TYPE_EXECUTE:
                 $this->state = ConnectionState::EXECUTING;
                 /** @var PreparedStatement $stmt */
-                $stmt = $this->currentCommand->context;
-                $this->executeHandler->start(
-                    $stmt->id,
-                    $this->currentCommand->params,
-                    $stmt->columnDefinitions,
-                    $this->currentCommand->promise
-                );
+                $stmt = $command->context;
+                if ($this->executeHandler !== null) {
+                    /** @var Promise<Result> $promise */
+                    $promise = $command->promise;
+                    /** @var array<int, mixed> $params */
+                    $params = $command->params;
+                    $this->executeHandler->start(
+                        $stmt->id,
+                        $params,
+                        $stmt->columnDefinitions,
+                        $promise
+                    );
+                }
 
                 break;
 
             case CommandRequest::TYPE_EXECUTE_STREAM:
                 $this->state = ConnectionState::EXECUTING;
                 /** @var ExecuteStreamContext $ctx */
-                $ctx = $this->currentCommand->context;
+                $ctx = $command->context;
 
-                $this->executeHandler->start(
-                    $ctx->statement->id,
-                    $this->currentCommand->params,
-                    $ctx->statement->columnDefinitions,
-                    $this->currentCommand->promise,
-                    $ctx->streamContext
-                );
+                if ($this->executeHandler !== null) {
+                    /** @var Promise<StreamStats> $promise */
+                    $promise = $command->promise;
+                    /** @var array<int, mixed> $params */
+                    $params = $command->params;
+                    $this->executeHandler->start(
+                        $ctx->statement->id,
+                        $params,
+                        $ctx->statement->columnDefinitions,
+                        $promise,
+                        $ctx->streamContext
+                    );
+                }
 
                 break;
 
             case CommandRequest::TYPE_CLOSE_STMT:
-                $this->sendClosePacket($this->currentCommand->statementId);
-                $this->currentCommand->promise->resolve(null);
+                $this->sendClosePacket($command->statementId);
+                $command->promise->resolve(null);
                 $this->currentCommand = null;
                 $this->processNextCommand();
 
                 return;
         }
 
-        $this->currentCommand->promise->then(
+        $command->promise->then(
             $this->finishCommand(...),
             $this->finishCommand(...)
         );
@@ -496,7 +540,7 @@ class Connection
     {
         $payload = \chr(0x19) . pack('V', $stmtId);
         $header = substr(pack('V', 5), 0, 3) . \chr(0);
-        $this->socket->write($header . $payload);
+        $this->socket?->write($header . $payload);
     }
 
     private function handleData(string $chunk): void
@@ -506,10 +550,22 @@ class Connection
         }
 
         try {
+            if ($this->packetReader === null) {
+                return;
+            }
+
             $this->packetReader->append($chunk);
 
             while ($this->packetReader->hasPacket()) {
-                $success = $this->packetReader->readPayload(function ($payloadReader, $length, $seq) {
+                $success = $this->packetReader->readPayload(function (mixed $payloadReader, mixed $length, mixed $seq): void {
+                    if (
+                        !($payloadReader instanceof \Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader) ||
+                        !\is_int($length) ||
+                        !\is_int($seq)
+                    ) {
+                        return;
+                    }
+
                     match ($this->state) {
                         ConnectionState::CONNECTING => $this->handshakeHandler?->processPacket($payloadReader, $length, $seq),
                         ConnectionState::QUERYING => $this->queryHandler?->processPacket($payloadReader, $length, $seq),
@@ -560,11 +616,11 @@ class Connection
         $this->isClosingError = true;
         $this->state = ConnectionState::CLOSED;
 
-        if ($this->connectPromise) {
+        if ($this->connectPromise !== null) {
             $this->connectPromise->reject($e);
             $this->connectPromise = null;
         }
-        if ($this->currentCommand) {
+        if ($this->currentCommand !== null) {
             $this->currentCommand->promise->reject($e);
         }
         while (! $this->commandQueue->isEmpty()) {
@@ -573,7 +629,7 @@ class Connection
                 new ConnectionException('Connection closed before execution', 0, $e)
             );
         }
-        if ($this->socket) {
+        if ($this->socket !== null) {
             $this->socket->close();
             $this->socket = null;
         }
@@ -590,12 +646,12 @@ class Connection
 
         $exception = new ConnectionException('Connection closed unexpectedly by the server');
 
-        if ($this->connectPromise) {
+        if ($this->connectPromise !== null) {
             $this->connectPromise->reject($exception);
             $this->connectPromise = null;
         }
 
-        if ($this->currentCommand) {
+        if ($this->currentCommand !== null) {
             $this->currentCommand->promise->reject($exception);
         }
     }
@@ -605,19 +661,9 @@ class Connection
         $message = $e->getMessage();
         $code = $e->getCode();
 
-        if ($this->isTimeoutError($message, $code)) {
-            return new TimeoutException(
-                'Database connection timed out: ' . $message,
-                $code,
-                $e
-            );
-        }
-
-        return new ConnectionException(
-            'Socket error: ' . $message,
-            $code,
-            $e
-        );
+        return $this->isTimeoutError($message, $code)
+            ? new TimeoutException('Database connection timed out: ' . $message, $code, $e)
+            : new ConnectionException('Socket error: ' . $message, $code, $e);
     }
 
     private function isTimeoutError(string $message, int $code): bool

@@ -197,19 +197,15 @@ final class HandshakeHandler
             $encryptionPromise = $this->socket->enableEncryption($sslOptions);
 
             $encryptionPromise->then(
-                function () use ($clientCaps) {
+                function () use ($clientCaps): void {
                     $this->isSslEnabled = true;
                     $this->sendAuthResponse($clientCaps);
                 },
-               
-                function (mixed $e) {
-                    $message = $e instanceof \Throwable ? $e->getMessage() : 'Unknown error';
-                    $cause = $e instanceof \Throwable ? $e : null;
-
+                function (\Throwable $e): void {
                     $this->promise->reject(new ConnectionException(
-                        'SSL/TLS handshake failed: ' . $message,
+                        'SSL/TLS handshake failed: ' . $e->getMessage(),
                         0,
-                        $cause
+                        $e
                     ));
                 }
             );

@@ -101,13 +101,7 @@ class PreparedStatement implements PreparedStatementInterface
 
             $commandPromise->then(
                 $stream->markCommandFinished(...),
-                function (mixed $e) use ($stream): void {
-                    if ($e instanceof \Throwable) {
-                        $stream->error($e);
-                    } else {
-                        $stream->error(new \RuntimeException('Stream failed with non-throwable error.'));
-                    }
-                }
+                $stream->error(...)
             );
 
             return $stream;

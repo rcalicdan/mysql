@@ -84,7 +84,9 @@ final class MysqlClient implements SqlClientInterface
             $this->enableStatementCache = $enableStatementCache;
 
             if ($this->enableStatementCache) {
-                $this->statementCaches = new \WeakMap();
+                /** @var \WeakMap<Connection, ArrayCache> $map */
+                $map = new \WeakMap();
+                $this->statementCaches = $map;
             }
 
             $this->isInitialized = true;
@@ -160,14 +162,17 @@ final class MysqlClient implements SqlClientInterface
 
                         return $stmt->execute($params);
                     })
-                    ->finally(function () use (&$stmtRef) {
+                    ->finally(function () use (&$stmtRef): ?PromiseInterface {
                         if ($stmtRef !== null) {
-                            return $stmtRef->close();
+                            /** @var PromiseInterface<void> $promise */
+                            $promise = $stmtRef->close();
+                            return $promise;
                         }
+                        return null;
                     })
                 ;
             })
-            ->finally(function () use ($pool, &$connection) {
+            ->finally(function () use ($pool, &$connection): void {
                 if ($connection !== null) {
                     $pool->release($connection);
                 }
@@ -237,8 +242,6 @@ final class MysqlClient implements SqlClientInterface
         return $pool->get()
             ->then(function (Connection $conn) use ($sql, $params, $pool) {
 
-                $streamPromise = null;
-
                 if (\count($params) === 0) {
                     $streamPromise = $conn->streamQuery($sql);
                 } else {
@@ -248,8 +251,9 @@ final class MysqlClient implements SqlClientInterface
                         });
                 }
 
-                return $streamPromise->then(
-                    function (MysqlRowStream $stream) use ($conn, $pool) {
+                /** @var PromiseInterface<MysqlRowStream> $finalPromise */
+                $finalPromise = $streamPromise->then(
+                    function (MysqlRowStream $stream) use ($conn, $pool): MysqlRowStream {
                         if ($stream instanceof Internals\RowStream) {
                             $stream->waitForCommand()->finally(fn() => $pool->release($conn));
                         } else {
@@ -258,12 +262,14 @@ final class MysqlClient implements SqlClientInterface
 
                         return $stream;
                     },
-                    function (\Throwable $e) use ($conn, $pool) {
+                    function (\Throwable $e) use ($conn, $pool): never {
                         $pool->release($conn);
 
                         throw $e;
                     }
                 );
+
+                return $finalPromise;
             })
         ;
     }
@@ -347,7 +353,7 @@ final class MysqlClient implements SqlClientInterface
                 }
             }
 
-            throw $lastError;
+            throw $lastError ?? new \RuntimeException('Transaction failed');
         });
     }
 
@@ -365,15 +371,24 @@ final class MysqlClient implements SqlClientInterface
      * {@inheritdoc}
      *
      * @throws NotInitializedException If this instance is not initialized
+     * @return array<string, bool|int>
      */
     public function getStats(): array
     {
         $stats = $this->getPool()->getStats();
 
-        $stats['statement_cache_enabled'] = $this->enableStatementCache;
-        $stats['statement_cache_size'] = $this->statementCacheSize;
+        /** @var array<string, bool|int> $clientStats */
+        $clientStats = [];
+        foreach ($stats as $key => $val) {
+            if (\is_bool($val) || \is_int($val)) {
+                $clientStats[$key] = $val;
+            }
+        }
 
-        return $stats;
+        $clientStats['statement_cache_enabled'] = $this->enableStatementCache;
+        $clientStats['statement_cache_size'] = $this->statementCacheSize;
+
+        return $clientStats;
     }
 
     /**
@@ -382,7 +397,9 @@ final class MysqlClient implements SqlClientInterface
     public function clearStatementCache(): void
     {
         if ($this->statementCaches !== null) {
-            $this->statementCaches = new \WeakMap();
+            /** @var \WeakMap<Connection, ArrayCache> $map */
+            $map = new \WeakMap();
+            $this->statementCaches = $map;
         }
     }
 
@@ -423,27 +440,32 @@ final class MysqlClient implements SqlClientInterface
      */
     private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
     {
-        if (! isset($this->statementCaches[$conn])) {
-            $this->statementCaches[$conn] = new ArrayCache($this->statementCacheSize);
+        $caches = $this->statementCaches;
+        if ($caches === null) {
+             return $conn->prepare($sql);
         }
 
-        $cache = $this->statementCaches[$conn];
+        if (! $caches->offsetExists($conn)) {
+            $caches->offsetSet($conn, new ArrayCache($this->statementCacheSize));
+        }
 
-        return $cache->get($sql)
-            ->then(function ($stmt) use ($conn, $sql, $cache) {
-                if ($stmt instanceof PreparedStatement) {
-                    return Promise::resolved($stmt);
-                }
+        $cache = $caches->offsetGet($conn);
 
-                return $conn->prepare($sql)
-                    ->then(function (PreparedStatement $stmt) use ($sql, $cache) {
-                        $cache->set($sql, $stmt);
+        /** @var PromiseInterface<mixed> $cachePromise */
+        $cachePromise = $cache->get($sql);
 
-                        return $stmt;
-                    })
-                ;
-            })
-        ;
+        return $cachePromise->then(function (mixed $stmt) use ($conn, $sql, $cache) {
+            if ($stmt instanceof PreparedStatement) {
+                return Promise::resolved($stmt);
+            }
+
+            return $conn->prepare($sql)
+                ->then(function (PreparedStatement $stmt) use ($sql, $cache) {
+                    $cache->set($sql, $stmt);
+                    return $stmt;
+                })
+            ;
+        });
     }
 
     /**
@@ -457,7 +479,7 @@ final class MysqlClient implements SqlClientInterface
     {
         if (! $this->isInitialized || $this->pool === null) {
             throw new NotInitializedException(
-                'MysqlClient instance has not been initialized or has been close.'
+                'MysqlClient instance has not been initialized or has been closed.'
             );
         }
 
