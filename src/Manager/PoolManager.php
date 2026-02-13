@@ -145,7 +145,7 @@ class PoolManager
             $connection = $this->pool->dequeue();
 
             $connId = spl_object_id($connection);
-            $now = hrtime(true);
+            $now = (int) hrtime(true);
 
             $lastUsed = $this->connectionLastUsed[$connId] ?? 0;
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
@@ -193,7 +193,7 @@ class PoolManager
                     function (MysqlConnection $connection) use ($promise): void {
                         // Track creation time for Max Lifetime
                         $connId = spl_object_id($connection);
-                        $this->connectionCreatedAt[$connId] = hrtime(true);
+                        $this->connectionCreatedAt[$connId] = (int) hrtime(true);
 
                         $promise->resolve($connection);
                     },
@@ -244,7 +244,7 @@ class PoolManager
             $connection->pause();
 
             $connId = spl_object_id($connection);
-            $now = hrtime(true);
+            $now = (int) hrtime(true);
 
             // If it expired while being used, discard it now rather than later.
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
@@ -341,7 +341,7 @@ class PoolManager
                         $connection->pause();
 
                         $connId = spl_object_id($connection);
-                        $this->connectionLastUsed[$connId] = hrtime(true);
+                        $this->connectionLastUsed[$connId] = (int) hrtime(true);
 
                         $tempQueue->enqueue($connection);
                     },
@@ -415,7 +415,7 @@ class PoolManager
                 function (MysqlConnection $newConnection) use ($promise): void {
                     // Track creation time for Max Lifetime
                     $connId = spl_object_id($newConnection);
-                    $this->connectionCreatedAt[$connId] = hrtime(true);
+                    $this->connectionCreatedAt[$connId] = (int) hrtime(true);
 
                     $promise->resolve($newConnection);
                 },

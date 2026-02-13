@@ -250,7 +250,7 @@ final class MysqlClient implements SqlClientInterface
                 } else {
                     $streamPromise = $this->getCachedStatement($conn, $sql)
                         ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
-                            return $stmt->executeStream($params, $bufferSize);
+                            return $stmt->executeStream(array_values($params), $bufferSize);
                         });
                 }
 

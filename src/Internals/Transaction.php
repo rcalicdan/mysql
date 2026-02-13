@@ -87,7 +87,7 @@ class Transaction implements TransactionInterface
 
         return $this->connection->prepare($sql)
             ->then(function (PreparedStatement $stmt) use ($params, $bufferSize): PromiseInterface {
-                return $stmt->executeStream($params, $bufferSize)
+                return $stmt->executeStream(array_values($params), $bufferSize)
                     ->then(function (MysqlRowStream $stream) use ($stmt): MysqlRowStream {
                         if ($stream instanceof RowStream) {
                             $stream->waitForCommand()->finally($stmt->close(...));
