@@ -44,6 +44,112 @@ describe('Connection', function (): void {
         $conn->close();
     });
 
+    describe('Pause and Resume', function (): void {
+
+        it('can pause and resume a connection without error', function (): void {
+            $conn = makeConnection();
+
+            $conn->pause();
+            $conn->resume();
+
+            expect($conn->isReady())->toBeTrue()
+                ->and($conn->isClosed())->toBeFalse();
+
+            $conn->close();
+        });
+
+        it('can execute a query after resuming a paused connection', function (): void {
+            $conn = makeConnection();
+
+            $conn->pause();
+            $conn->resume();
+
+            $result = await($conn->query('SELECT 1 AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('1');
+
+            $conn->close();
+        });
+
+        it('can pause and resume multiple times and still query', function (): void {
+            $conn = makeConnection();
+
+            $conn->pause();
+            $conn->resume();
+            $conn->pause();
+            $conn->resume();
+            $conn->pause();
+            $conn->resume();
+
+            $result = await($conn->query('SELECT 1 AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('1');
+
+            $conn->close();
+        });
+
+        it('can execute a prepared statement after resuming', function (): void {
+            $conn = makeConnection();
+
+            await($conn->query(
+                "INSERT INTO pest_users (name, email, age) VALUES ('PauseUser', 'pause@example.com', 45)"
+            ));
+
+            $conn->pause();
+            $conn->resume();
+
+            $stmt   = await($conn->prepare(
+                'SELECT name, age FROM pest_users WHERE email = ?'
+            ));
+            $result = await($stmt->execute(['pause@example.com']));
+            $row    = $result->fetchOne();
+
+            expect($row['name'])->toBe('PauseUser')
+                ->and((int) $row['age'])->toBe(45);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('can stream a query after resuming a paused connection', function (): void {
+            $conn = makeConnection();
+
+            await($conn->query(
+                "INSERT INTO pest_users (name, email, age) VALUES ('ResumeStream', 'resumestream@example.com', 60)"
+            ));
+
+            $conn->pause();
+            $conn->resume();
+
+            $stream = await($conn->streamQuery('SELECT name FROM pest_users ORDER BY id'));
+
+            $rows = [];
+            foreach ($stream as $row) {
+                $rows[] = $row;
+            }
+
+            expect($rows)->toHaveCount(1)
+                ->and($rows[0]['name'])->toBe('ResumeStream');
+
+            $conn->close();
+        });
+
+        it('pausing does not lose connection state', function (): void {
+            $conn = makeConnection();
+
+            expect($conn->isReady())->toBeTrue();
+
+            $conn->pause();
+
+            expect($conn->isReady())->toBeTrue()
+                ->and($conn->isClosed())->toBeFalse();
+
+            $conn->resume();
+
+            $conn->close();
+        });
+    });
+
     describe('Connectivity', function (): void {
 
         it('connects to MySQL and returns a ready Connection', function (): void {
