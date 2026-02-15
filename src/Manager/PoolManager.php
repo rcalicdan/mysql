@@ -355,8 +355,7 @@ class PoolManager
         // Wait for all pings to complete
         Promise::all($checkPromises)
             ->then(
-                function () use ($promise, $tempQueue, $stats): void {
-                    // Return healthy connections back to pool
+                function () use ($promise, $tempQueue, &$stats): void {   
                     while (! $tempQueue->isEmpty()) {
                         /** @var MysqlConnection $conn */
                         $conn = $tempQueue->dequeue();
@@ -364,8 +363,7 @@ class PoolManager
                     }
                     $promise->resolve($stats);
                 },
-                function (Throwable $e) use ($promise, $tempQueue): void {
-                    // Return any remaining connections back to pool
+                function (Throwable $e) use ($promise, $tempQueue): void { 
                     while (! $tempQueue->isEmpty()) {
                         /** @var MysqlConnection $conn */
                         $conn = $tempQueue->dequeue();
@@ -373,8 +371,7 @@ class PoolManager
                     }
                     $promise->reject($e);
                 }
-            )
-        ;
+            );
 
         return $promise;
     }

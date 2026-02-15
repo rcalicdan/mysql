@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Internals\Connection;
+use Hibla\Mysql\Manager\PoolManager;
+use Hibla\Mysql\MysqlClient;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 
 use function Hibla\await;
@@ -105,4 +107,46 @@ function makeConnection(): Connection
     $conn = await(Connection::create(testConnectionParams()));
 
     return $conn;
+}
+
+function makePool(int $maxSize = 5, int $idleTimeout = 300, int $maxLifetime = 3600): PoolManager
+{
+    return new PoolManager(testConnectionParams(), $maxSize, $idleTimeout, $maxLifetime);
+}
+
+function makeClient(
+    int $maxConnections = 5,
+    int $idleTimeout = 300,
+    int $maxLifetime = 3600,
+    int $statementCacheSize = 256,
+    bool $enableStatementCache = true
+): MysqlClient {
+    return new MysqlClient(
+        testConnectionParams(),
+        $maxConnections,
+        $idleTimeout,
+        $maxLifetime,
+        $statementCacheSize,
+        $enableStatementCache
+    );
+}
+
+function makeTransactionClient(int $maxConnections = 5): MysqlClient
+{
+    return new MysqlClient(
+        testConnectionParams(),
+        $maxConnections,
+        300,
+        3600
+    );
+}
+
+function makeConcurrentClient(int $maxConnections = 10): MysqlClient
+{
+    return new MysqlClient(
+        testConnectionParams(),
+        $maxConnections,
+        300,
+        3600
+    );
 }

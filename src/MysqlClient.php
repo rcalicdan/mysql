@@ -282,23 +282,21 @@ final class MysqlClient implements SqlClientInterface
      */
     public function beginTransaction(?IsolationLevelInterface $isolationLevel = null): PromiseInterface
     {
-        $pool = $this->getPool();
+        $pool       = $this->getPool();
         $connection = null;
 
         return $pool->get()
             ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
                 $connection = $conn;
 
-                $sql = 'START TRANSACTION';
-                if ($isolationLevel !== null) {
-                    $sql = "SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}; START TRANSACTION";
-                }
+                $promise = $isolationLevel !== null
+                    ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
+                    ->then(fn() => $conn->query('START TRANSACTION'))
+                    : $conn->query('START TRANSACTION');
 
-                return $conn->query($sql)
-                    ->then(function () use ($conn, $pool) {
-                        return new Transaction($conn, $pool);
-                    })
-                ;
+                return $promise->then(function () use ($conn, $pool) {
+                    return new Transaction($conn, $pool);
+                });
             })
             ->catch(function (\Throwable $e) use ($pool, &$connection) {
                 if ($connection !== null) {
