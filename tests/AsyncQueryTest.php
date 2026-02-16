@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use Hibla\Promise\Promise;
-
 use function Hibla\await;
+
+use Hibla\Promise\Promise;
 
 beforeAll(function (): void {
     $client = makeConcurrentClient();
@@ -32,7 +32,7 @@ beforeEach(function (): void {
 });
 
 describe('Concurrent Query Execution', function (): void {
-    
+
     describe('Parallel SELECT', function (): void {
 
         it('executes multiple SELECT queries concurrently and all resolve', function (): void {
@@ -62,12 +62,13 @@ describe('Concurrent Query Execution', function (): void {
                 $promises[] = $client->query('SELECT SLEEP(0.1) AS done');
             }
 
-            $start   = microtime(true);
+            $start = microtime(true);
             $results = await(Promise::all($promises));
             $elapsed = microtime(true) - $start;
 
             expect($results)->toHaveCount(5)
-                ->and($elapsed)->toBeLessThan(0.4);
+                ->and($elapsed)->toBeLessThan(0.4)
+            ;
 
             $client->close();
         });
@@ -85,7 +86,8 @@ describe('Concurrent Query Execution', function (): void {
 
             expect($r1->fetchOne()['val'])->toBe('100')
                 ->and($r2->fetchOne()['val'])->toBe('200')
-                ->and($r3->fetchOne()['val'])->toBe('300');
+                ->and($r3->fetchOne()['val'])->toBe('300')
+            ;
 
             $client->close();
         });
@@ -133,7 +135,7 @@ describe('Concurrent Query Execution', function (): void {
             $promises = [];
             for ($i = 1; $i <= 5; $i++) {
                 $promises[] = $client->execute(
-                    "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                    'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                     [$i, "worker_{$i}"]
                 );
             }
@@ -141,7 +143,8 @@ describe('Concurrent Query Execution', function (): void {
             $results = await(Promise::all($promises));
 
             expect($results)->toHaveCount(5)
-                ->and(array_sum($results))->toBe(5);
+                ->and(array_sum($results))->toBe(5)
+            ;
 
             $count = await($client->query('SELECT COUNT(*) AS cnt FROM concurrent_test'));
 
@@ -156,7 +159,7 @@ describe('Concurrent Query Execution', function (): void {
             $promises = [];
             for ($i = 1; $i <= 5; $i++) {
                 $promises[] = $client->executeGetId(
-                    "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                    'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                     [$i, "id_check_{$i}"]
                 );
             }
@@ -174,7 +177,7 @@ describe('Concurrent Query Execution', function (): void {
             $promises = [];
             for ($i = 1; $i <= 4; $i++) {
                 $promises[] = $client->execute(
-                    "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                    'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                     [$i, "affected_{$i}"]
                 );
             }
@@ -206,7 +209,8 @@ describe('Concurrent Query Execution', function (): void {
             expect($select1->fetchOne()['val'])->toBe('1')
                 ->and($insert1)->toBe(1)
                 ->and($select2->fetchOne()['val'])->toBe('2')
-                ->and($insert2)->toBe(1);
+                ->and($insert2)->toBe(1)
+            ;
 
             $client->close();
         });
@@ -224,7 +228,8 @@ describe('Concurrent Query Execution', function (): void {
 
             expect($r1['val'])->toBe('10')
                 ->and($r2['val'])->toBe('20')
-                ->and($r3['val'])->toBe('30');
+                ->and($r3['val'])->toBe('30')
+            ;
 
             $client->close();
         });
@@ -242,7 +247,8 @@ describe('Concurrent Query Execution', function (): void {
 
             expect($v1)->toBe('111')
                 ->and($v2)->toBe('222')
-                ->and($v3)->toBe('333');
+                ->and($v3)->toBe('333')
+            ;
 
             $client->close();
         });
@@ -264,7 +270,8 @@ describe('Concurrent Query Execution', function (): void {
             expect($results[0]->fetchOne()['val'])->toBe('1')
                 ->and($results[1]->fetchOne()['val'])->toBe(2)
                 ->and($results[2]->fetchOne()['val'])->toBe('3')
-                ->and($results[3]->fetchOne()['val'])->toBe(4);
+                ->and($results[3]->fetchOne()['val'])->toBe(4)
+            ;
 
             await($stmt->close());
             $client->close();
@@ -278,7 +285,7 @@ describe('Concurrent Query Execution', function (): void {
 
             for ($i = 1; $i <= 3; $i++) {
                 await($client->execute(
-                    "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                    'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                     [$i, "stream_{$i}"]
                 ));
             }
@@ -296,12 +303,14 @@ describe('Concurrent Query Execution', function (): void {
                 foreach ($stream as $row) {
                     $rows[] = $row;
                 }
+
                 return $rows;
             };
 
             expect($collect($s1))->toHaveCount(1)
                 ->and($collect($s2))->toHaveCount(1)
-                ->and($collect($s3))->toHaveCount(1);
+                ->and($collect($s3))->toHaveCount(1)
+            ;
 
             $client->close();
         });
@@ -327,7 +336,8 @@ describe('Concurrent Query Execution', function (): void {
             }
 
             expect($rows1)->toBe(['1', '2', '3'])
-                ->and($rows2)->toBe(['4', '5', '6']);
+                ->and($rows2)->toBe(['4', '5', '6'])
+            ;
 
             $client->close();
         });
@@ -342,9 +352,10 @@ describe('Concurrent Query Execution', function (): void {
             for ($i = 1; $i <= 3; $i++) {
                 $promises[] = $client->transaction(function ($tx) use ($i) {
                     $result = await($tx->execute(
-                        "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                        'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                         [$i, "tx_{$i}"]
                     ));
+
                     return $result;
                 });
             }
@@ -370,7 +381,7 @@ describe('Concurrent Query Execution', function (): void {
                     ));
                 }),
                 $client->transaction(function (): void {
-                    throw new \RuntimeException('intentional failure');
+                    throw new RuntimeException('intentional failure');
                 }),
                 $client->transaction(function ($tx) {
                     return await($tx->execute(
@@ -383,7 +394,7 @@ describe('Concurrent Query Execution', function (): void {
 
             $fulfilled = 0;
             $rejected = 0;
-            
+
             foreach ($results as $result) {
                 if ($result->isFulfilled()) {
                     $fulfilled++;
@@ -409,11 +420,12 @@ describe('Concurrent Query Execution', function (): void {
             for ($i = 1; $i <= 5; $i++) {
                 $promises[] = $client->transaction(function ($tx) use ($i) {
                     await($tx->execute(
-                        "INSERT INTO concurrent_test (worker, value) VALUES (?, ?)",
+                        'INSERT INTO concurrent_test (worker, value) VALUES (?, ?)',
                         [$i, "integrity_{$i}"]
                     ));
                     $result = await($tx->query('SELECT COUNT(*) AS cnt FROM concurrent_test'));
                     $cnt = (int) $result->fetchOne()['cnt'];
+
                     return $cnt;
                 });
             }
@@ -438,7 +450,7 @@ describe('Concurrent Query Execution', function (): void {
                 $promises[] = $client->query("SELECT {$i} AS val, SLEEP(0.05) AS done");
             }
 
-            $start   = microtime(true);
+            $start = microtime(true);
             $results = await(Promise::all($promises));
             $elapsed = microtime(true) - $start;
 
@@ -464,7 +476,8 @@ describe('Concurrent Query Execution', function (): void {
             $stats = $client->getStats();
 
             expect($stats['waiting_requests'])->toBe(0)
-                ->and($stats['pooled_connections'])->toBe($stats['active_connections']);
+                ->and($stats['pooled_connections'])->toBe($stats['active_connections'])
+            ;
 
             $client->close();
         });
@@ -479,7 +492,7 @@ describe('Concurrent Query Execution', function (): void {
 
             try {
                 await(Promise::all($promises));
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // Expected failure
             }
 

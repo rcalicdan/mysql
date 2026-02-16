@@ -4,16 +4,17 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
-use Hibla\Stream\Traits\PromiseHelperTrait;
 use function Hibla\async;
 
 use Hibla\Mysql\Interfaces\MysqlResult;
+
 use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Sql\Exceptions\PreparedException;
 use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
+use Hibla\Stream\Traits\PromiseHelperTrait;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
@@ -42,7 +43,8 @@ class PreparedStatement implements PreparedStatementInterface
         public readonly int $numParams,
         public readonly array $columnDefinitions = [],
         public readonly array $paramDefinitions = []
-    ) {}
+    ) {
+    }
 
     /**
      * {@inheritdoc}
@@ -119,7 +121,7 @@ class PreparedStatement implements PreparedStatementInterface
 
     /**
      * {@inheritdoc}
-     * 
+     *
      * @return PromiseInterface<void>
      */
     public function close(): PromiseInterface

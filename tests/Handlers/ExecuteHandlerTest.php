@@ -225,7 +225,8 @@ describe('ExecuteHandler', function () {
 
         $errorTriggered = false;
         $streamContext = new StreamContext(
-            onRow: function (array $row) {},
+            onRow: function (array $row) {
+            },
             onError: function () use (&$errorTriggered) {
                 $errorTriggered = true;
             }
@@ -235,7 +236,8 @@ describe('ExecuteHandler', function () {
         $handler = new ExecuteHandler($socket, $commandBuilder);
         $promise = new Promise();
 
-        $promise->catch(function () {});
+        $promise->catch(function () {
+        });
 
         $handler->start(1, [], [], $promise, $streamContext);
 

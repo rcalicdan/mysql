@@ -47,7 +47,7 @@ class RowStream implements MysqlRowStream
 
     /**
      * Callback for backpressure control (pause/resume socket reading).
-     * 
+     *
      * @var \Closure(bool): void|null
      */
     private ?\Closure $onBackpressure = null;
@@ -93,7 +93,7 @@ class RowStream implements MysqlRowStream
                 throw $this->error;
             }
 
-            if (!$this->buffer->isEmpty()) {
+            if (! $this->buffer->isEmpty()) {
                 $row = $this->buffer->dequeue();
 
                 // Resume socket reading when buffer drains below threshold

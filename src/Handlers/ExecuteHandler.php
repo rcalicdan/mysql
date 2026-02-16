@@ -50,24 +50,25 @@ final class ExecuteHandler
     private ?StreamContext $streamContext = null;
 
     /**
-     *  @var Promise<Result|StreamStats>|null 
+     *  @var Promise<Result|StreamStats>|null
      */
     private ?Promise $currentPromise = null;
 
     /**
-     *  @var array<int, array<string, mixed>> 
+     *  @var array<int, array<string, mixed>>
      */
     private array $rows = [];
 
     /**
-     *  @var array<int, ColumnDefinition> 
+     *  @var array<int, ColumnDefinition>
      */
     private array $columnDefinitions = [];
 
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<int, mixed> $params
@@ -264,7 +265,7 @@ final class ExecuteHandler
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $columns = array_map(fn(ColumnDefinition $c) => $c->name, $this->columnDefinitions);
+                $columns = array_map(fn (ColumnDefinition $c) => $c->name, $this->columnDefinitions);
                 $result = new Result(
                     rows: $this->rows,
                     affectedRows: 0,

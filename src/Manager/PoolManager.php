@@ -33,12 +33,12 @@ use Throwable;
 class PoolManager
 {
     /**
-     * @var SplQueue<MysqlConnection> 
+     * @var SplQueue<MysqlConnection>
      */
     private SplQueue $pool;
 
     /**
-     * @var SplQueue<Promise<MysqlConnection>> 
+     * @var SplQueue<Promise<MysqlConnection>>
      */
     private SplQueue $waiters;
 
@@ -47,7 +47,7 @@ class PoolManager
     private int $activeConnections = 0;
 
     /**
-     * @var ConnectionParams 
+     * @var ConnectionParams
      */
     private ConnectionParams $connectionParams;
 
@@ -57,27 +57,27 @@ class PoolManager
     private ?ConnectorInterface $connector;
 
     /**
-     * @var bool 
+     * @var bool
      */
     private bool $configValidated = false;
 
     /**
-     * @var int 
+     * @var int
      */
     private int $idleTimeoutNanos;
 
     /**
-     * @var int 
+     * @var int
      */
     private int $maxLifetimeNanos;
 
     /**
-     * @var array<int, int> 
+     * @var array<int, int>
      */
     private array $connectionLastUsed = [];
 
     /**
-     * @var array<int, int> 
+     * @var array<int, int>
      */
     private array $connectionCreatedAt = [];
 
@@ -349,13 +349,14 @@ class PoolManager
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                );
+                )
+            ;
         }
 
         // Wait for all pings to complete
         Promise::all($checkPromises)
             ->then(
-                function () use ($promise, $tempQueue, &$stats): void {   
+                function () use ($promise, $tempQueue, &$stats): void {
                     while (! $tempQueue->isEmpty()) {
                         /** @var MysqlConnection $conn */
                         $conn = $tempQueue->dequeue();
@@ -363,7 +364,7 @@ class PoolManager
                     }
                     $promise->resolve($stats);
                 },
-                function (Throwable $e) use ($promise, $tempQueue): void { 
+                function (Throwable $e) use ($promise, $tempQueue): void {
                     while (! $tempQueue->isEmpty()) {
                         /** @var MysqlConnection $conn */
                         $conn = $tempQueue->dequeue();
@@ -371,7 +372,8 @@ class PoolManager
                     }
                     $promise->reject($e);
                 }
-            );
+            )
+        ;
 
         return $promise;
     }

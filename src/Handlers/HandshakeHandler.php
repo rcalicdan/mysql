@@ -25,17 +25,16 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
 /**
  * Handles MySQL handshake protocol including SSL/TLS upgrade.
- *  
- * MySQL uses STARTTLS protocol which requires upgrading an existing
- * plain-text connection to encrypted during the handshake phase.
- * This is different from most protocols which use TLS from connection start.
+ *
+ * MySQL uses a STARTTLS-like protocol which requires upgrading an existing
+ * plain-text connection to encrypted during the handshake phase. This is
+ * different from most protocols which use TLS from the beginning.
  *
  * Requirements:
- * - Socket must support enableEncryption(array $sslOptions): PromiseInterface
- *   for mid-connection SSL/TLS upgrade (MySQL's STARTTLS protocol)
+ * - The underlying Socket implementation MUST support an `enableEncryption()` method
+ *   for mid-connection SSL/TLS upgrade.
  *
- * Note: This is a MySQL-specific requirement. Most protocols don't need
- * mid-connection encryption upgrade and should use tls:// scheme instead.
+ * @internal
  */
 final class HandshakeHandler
 {
@@ -45,7 +44,13 @@ final class HandshakeHandler
     private int $sequenceId = 0;
     private bool $isSslEnabled = false;
 
-    /** @var Promise<int> */
+    /**
+     * The MySQL server thread ID for this connection.
+     * Captured from the initial handshake packet.
+     */
+    private int $threadId = 0;
+
+    /** @var Promise<int> The promise that resolves with the next sequence ID on successful handshake. */
     private Promise $promise;
 
     public function __construct(
@@ -54,11 +59,21 @@ final class HandshakeHandler
     ) {
         /** @var Promise<int> $promise */
         $promise = new Promise();
-
         $this->promise = $promise;
     }
 
     /**
+     * Returns the MySQL connection/thread ID received during handshake.
+     * Returns 0 if handshake has not completed yet.
+     */
+    public function getThreadId(): int
+    {
+        return $this->threadId;
+    }
+
+    /**
+     * Starts the handshake process.
+     *
      * @return PromiseInterface<int>
      */
     public function start(UncompressedPacketReader $packetReader): PromiseInterface
@@ -70,6 +85,9 @@ final class HandshakeHandler
         return $this->promise;
     }
 
+    /**
+     * Processes incoming packets during the handshake phase.
+     */
     public function processPacket(PayloadReader $payloadReader, int $length, int $seq): void
     {
         if ($this->serverCapabilities === 0) {
@@ -85,14 +103,10 @@ final class HandshakeHandler
     {
         try {
             $parser = new HandshakeParser();
-
             $frame = $parser->parse($reader, $length, $seq);
 
             if ($frame instanceof ErrPacket) {
-                $exception = new ConnectionException(
-                    "MySQL Connection Error [{$frame->errorCode}]: {$frame->errorMessage}",
-                    $frame->errorCode
-                );
+                $exception = new ConnectionException("MySQL Connection Error [{$frame->errorCode}]: {$frame->errorMessage}", $frame->errorCode);
                 $this->promise->reject($exception);
 
                 return;
@@ -101,10 +115,10 @@ final class HandshakeHandler
             /** @var HandshakeV10 $handshake */
             $handshake = $frame;
 
+            $this->threadId = $handshake->connectionId;
             $this->scramble = $handshake->authData;
             $this->authPlugin = $handshake->authPlugin;
             $this->serverCapabilities = $handshake->capabilities;
-
             $this->sequenceId = $seq + 1;
 
             $clientCaps = $this->calculateCapabilities();
@@ -113,10 +127,7 @@ final class HandshakeHandler
                 $this->performSslUpgrade($clientCaps);
             } else {
                 if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) === 0) {
-                    $this->promise->reject(new ConnectionException(
-                        'SSL/TLS connection requested but server does not support SSL',
-                        0
-                    ));
+                    $this->promise->reject(new ConnectionException('SSL/TLS connection requested but server does not support SSL', 0));
 
                     return;
                 }
@@ -124,11 +135,7 @@ final class HandshakeHandler
                 $this->sendAuthResponse($clientCaps);
             }
         } catch (\Throwable $e) {
-            $wrappedException = new ConnectionException(
-                'Failed to process initial handshake: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            );
+            $wrappedException = new ConnectionException('Failed to process initial handshake: ' . $e->getMessage(), (int)$e->getCode(), $e);
             $this->promise->reject($wrappedException);
         }
     }
@@ -154,21 +161,14 @@ final class HandshakeHandler
                 $this->configureSslAndEnable($clientCaps);
             });
         } catch (\Throwable $e) {
-            $this->promise->reject(new ConnectionException(
-                'Failed to initiate SSL upgrade: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new ConnectionException('Failed to initiate SSL upgrade: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
     private function configureSslAndEnable(int $clientCaps): void
     {
         if (! method_exists($this->socket, 'enableEncryption')) {
-            $this->promise->reject(new ConnectionException(
-                'Socket does not support SSL/TLS upgrade. ' .
-                    'MySQL requires STARTTLS capability for encrypted connections.'
-            ));
+            $this->promise->reject(new ConnectionException('Socket does not support SSL/TLS upgrade. MySQL requires STARTTLS capability for encrypted connections.'));
 
             return;
         }
@@ -184,11 +184,9 @@ final class HandshakeHandler
             if ($this->params->sslCa !== null) {
                 $sslOptions['cafile'] = $this->params->sslCa;
             }
-
             if ($this->params->sslCert !== null) {
                 $sslOptions['local_cert'] = $this->params->sslCert;
             }
-
             if ($this->params->sslKey !== null) {
                 $sslOptions['local_pk'] = $this->params->sslKey;
             }
@@ -202,19 +200,11 @@ final class HandshakeHandler
                     $this->sendAuthResponse($clientCaps);
                 },
                 function (\Throwable $e): void {
-                    $this->promise->reject(new ConnectionException(
-                        'SSL/TLS handshake failed: ' . $e->getMessage(),
-                        0,
-                        $e
-                    ));
+                    $this->promise->reject(new ConnectionException('SSL/TLS handshake failed: ' . $e->getMessage(), 0, $e));
                 }
             );
         } catch (\Throwable $e) {
-            $this->promise->reject(new ConnectionException(
-                'Failed to configure SSL/TLS options: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new ConnectionException('Failed to configure SSL/TLS options: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
@@ -229,14 +219,9 @@ final class HandshakeHandler
                 $this->params->database,
                 $this->authPlugin
             );
-
             $this->writePacket($response);
         } catch (\Throwable $e) {
-            $this->promise->reject(new AuthenticationException(
-                'Failed to build authentication response: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new AuthenticationException('Failed to build authentication response: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
@@ -250,19 +235,16 @@ final class HandshakeHandler
 
             return;
         }
-
         if ($firstByte === AuthPacketType::ERR) {
             $this->handleAuthError($reader);
 
             return;
         }
-
         if ($firstByte === AuthPacketType::AUTH_SWITCH_REQUEST) {
             $this->handleAuthPluginSwitch($reader);
 
             return;
         }
-
         if ($firstByte === AuthPacketType::AUTH_MORE_DATA) {
             $this->handleAuthMoreData($reader, $length);
         }
@@ -279,7 +261,6 @@ final class HandshakeHandler
         $reader->readFixedString(1);
         $sqlState = $reader->readFixedString(5);
         $message = $reader->readRestOfPacketString();
-
         $exception = $this->createAuthException($errorCode, $sqlState, $message);
         $this->promise->reject($exception);
     }
@@ -292,11 +273,7 @@ final class HandshakeHandler
             $response = $this->generateAuthResponse($this->authPlugin, $this->scramble);
             $this->writePacket($response);
         } catch (\Throwable $e) {
-            $this->promise->reject(new AuthenticationException(
-                'Failed to handle auth plugin switch: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new AuthenticationException('Failed to handle auth plugin switch: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
@@ -309,33 +286,23 @@ final class HandshakeHandler
                 $this->handleRsaPublicKey($reader);
             }
         } catch (\Throwable $e) {
-            $this->promise->reject(new AuthenticationException(
-                'Failed to handle authentication continuation: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new AuthenticationException('Failed to handle authentication continuation: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
     private function handleAuthSubStatus(PayloadReader $reader): void
     {
         $subStatus = $reader->readFixedInteger(1);
-
         if ($subStatus === AuthPacketType::FULL_AUTH_REQUIRED) {
             $this->sendFullAuthCredentials();
-        } elseif ($subStatus === AuthPacketType::FAST_AUTH_SUCCESS) {
-            // Fast auth success, waiting for final OK packet
-            return;
         }
     }
 
     private function sendFullAuthCredentials(): void
     {
         if ($this->isSslEnabled) {
-            // Send plaintext password over encrypted connection
             $this->writePacket($this->params->password . "\0");
         } else {
-            // Request RSA public key for encryption
             $this->writePacket(\chr(0x02));
         }
     }
@@ -345,18 +312,10 @@ final class HandshakeHandler
         $publicKey = $reader->readRestOfPacketString();
 
         try {
-            $encrypted = AuthScrambler::scrambleSha256Rsa(
-                $this->params->password,
-                $this->scramble,
-                $publicKey
-            );
+            $encrypted = AuthScrambler::scrambleSha256Rsa($this->params->password, $this->scramble, $publicKey);
             $this->writePacket($encrypted);
         } catch (\Throwable $e) {
-            $this->promise->reject(new AuthenticationException(
-                'Failed to encrypt password with RSA: ' . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            ));
+            $this->promise->reject(new AuthenticationException('Failed to encrypt password with RSA: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
@@ -371,22 +330,13 @@ final class HandshakeHandler
     private function generateAuthResponse(string $plugin, string $scramble): string
     {
         try {
-            if ($plugin === 'mysql_native_password') {
-                return AuthScrambler::scrambleNativePassword($this->params->password, $scramble);
-            }
-
-            if ($plugin === 'caching_sha2_password') {
-                return AuthScrambler::scrambleCachingSha2Password($this->params->password, $scramble);
-            }
-
-            // Unknown plugin - return empty response
-            return '';
+            return match ($plugin) {
+                'mysql_native_password' => AuthScrambler::scrambleNativePassword($this->params->password, $scramble),
+                'caching_sha2_password' => AuthScrambler::scrambleCachingSha2Password($this->params->password, $scramble),
+                default => '',
+            };
         } catch (\Throwable $e) {
-            throw new AuthenticationException(
-                "Failed to generate authentication response for plugin '{$plugin}': " . $e->getMessage(),
-                (int)$e->getCode(),
-                $e
-            );
+            throw new AuthenticationException("Failed to generate authentication response for plugin '{$plugin}': " . $e->getMessage(), (int)$e->getCode(), $e);
         }
     }
 
@@ -395,22 +345,18 @@ final class HandshakeHandler
         $authErrorCodes = [
             1045 => 'Access denied - Invalid username or password',
             1040 => 'Too many connections',
-            1129 => 'Host is blocked due to too many connection errors',
+            1129 => 'Host is blocked due to many connection errors',
             1130 => 'Host is not allowed to connect',
             1131 => 'Access denied - No permission to connect',
             1132 => 'Password change required',
             1133 => 'Password has expired',
             1227 => 'Access denied - Insufficient privileges',
             1251 => 'Client does not support authentication protocol',
-            2049 => 'Connection using old (pre-4.1.1) authentication protocol refused',
+            2049 => 'Connection using old authentication protocol refused',
         ];
-
         $errorDescription = $authErrorCodes[$errorCode] ?? 'Authentication failed';
 
-        return new AuthenticationException(
-            "MySQL Authentication Error [{$errorCode}] [{$sqlState}]: {$message} - {$errorDescription}",
-            $errorCode
-        );
+        return new AuthenticationException("MySQL Authentication Error [{$errorCode}] [{$sqlState}]: {$message} - {$errorDescription}", $errorCode);
     }
 
     private function calculateCapabilities(): int

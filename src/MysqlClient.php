@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql;
 
+use function Hibla\async;
+use function Hibla\await;
+
 use Hibla\Cache\ArrayCache;
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
@@ -19,11 +22,9 @@ use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Sql\IsolationLevelInterface;
 use Hibla\Sql\Result as ResultInterface;
+
 use Hibla\Sql\SqlClientInterface;
 use Hibla\Sql\Transaction as TransactionInterface;
-
-use function Hibla\async;
-use function Hibla\await;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -166,8 +167,10 @@ final class MysqlClient implements SqlClientInterface
                         if ($stmtRef !== null) {
                             /** @var PromiseInterface<void> $promise */
                             $promise = $stmtRef->close();
+
                             return $promise;
                         }
+
                         return null;
                     })
                 ;
@@ -186,7 +189,7 @@ final class MysqlClient implements SqlClientInterface
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->getAffectedRows())
+            ->then(fn (ResultInterface $result) => $result->getAffectedRows())
         ;
     }
 
@@ -196,7 +199,7 @@ final class MysqlClient implements SqlClientInterface
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->getLastInsertId())
+            ->then(fn (ResultInterface $result) => $result->getLastInsertId())
         ;
     }
 
@@ -206,7 +209,7 @@ final class MysqlClient implements SqlClientInterface
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->fetchOne())
+            ->then(fn (ResultInterface $result) => $result->fetchOne())
         ;
     }
 
@@ -251,14 +254,15 @@ final class MysqlClient implements SqlClientInterface
                     $streamPromise = $this->getCachedStatement($conn, $sql)
                         ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
                             return $stmt->executeStream(array_values($params), $bufferSize);
-                        });
+                        })
+                    ;
                 }
 
                 /** @var PromiseInterface<MysqlRowStream> $finalPromise */
                 $finalPromise = $streamPromise->then(
                     function (MysqlRowStream $stream) use ($conn, $pool): MysqlRowStream {
                         if ($stream instanceof Internals\RowStream) {
-                            $stream->waitForCommand()->finally(fn() => $pool->release($conn));
+                            $stream->waitForCommand()->finally(fn () => $pool->release($conn));
                         } else {
                             $pool->release($conn);
                         }
@@ -282,7 +286,7 @@ final class MysqlClient implements SqlClientInterface
      */
     public function beginTransaction(?IsolationLevelInterface $isolationLevel = null): PromiseInterface
     {
-        $pool       = $this->getPool();
+        $pool = $this->getPool();
         $connection = null;
 
         return $pool->get()
@@ -291,7 +295,7 @@ final class MysqlClient implements SqlClientInterface
 
                 $promise = $isolationLevel !== null
                     ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
-                    ->then(fn() => $conn->query('START TRANSACTION'))
+                    ->then(fn () => $conn->query('START TRANSACTION'))
                     : $conn->query('START TRANSACTION');
 
                 return $promise->then(function () use ($conn, $pool) {
@@ -332,7 +336,7 @@ final class MysqlClient implements SqlClientInterface
                     /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn() => $callback($tx)));
+                    $result = await(async(fn () => $callback($tx)));
 
                     await($tx->commit());
 
@@ -463,6 +467,7 @@ final class MysqlClient implements SqlClientInterface
             return $conn->prepare($sql)
                 ->then(function (PreparedStatement $stmt) use ($sql, $cache) {
                     $cache->set($sql, $stmt);
+
                     return $stmt;
                 })
             ;

@@ -2,15 +2,16 @@
 
 declare(strict_types=1);
 
+use function Hibla\await;
+
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\Internals\RowStream;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Socket\Connector;
-use Hibla\Sql\Exceptions\ConnectionException;
 
-use function Hibla\await;
+use Hibla\Sql\Exceptions\ConnectionException;
 
 beforeAll(function (): void {
     $conn = makeConnection();
@@ -28,7 +29,6 @@ beforeAll(function (): void {
 
     $conn->close();
 });
-
 
 afterAll(function (): void {
     $conn = makeConnection();
@@ -53,7 +53,8 @@ describe('Connection', function (): void {
             $conn->resume();
 
             expect($conn->isReady())->toBeTrue()
-                ->and($conn->isClosed())->toBeFalse();
+                ->and($conn->isClosed())->toBeFalse()
+            ;
 
             $conn->close();
         });
@@ -98,14 +99,15 @@ describe('Connection', function (): void {
             $conn->pause();
             $conn->resume();
 
-            $stmt   = await($conn->prepare(
+            $stmt = await($conn->prepare(
                 'SELECT name, age FROM pest_users WHERE email = ?'
             ));
             $result = await($stmt->execute(['pause@example.com']));
-            $row    = $result->fetchOne();
+            $row = $result->fetchOne();
 
             expect($row['name'])->toBe('PauseUser')
-                ->and((int) $row['age'])->toBe(45);
+                ->and((int) $row['age'])->toBe(45)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -129,7 +131,8 @@ describe('Connection', function (): void {
             }
 
             expect($rows)->toHaveCount(1)
-                ->and($rows[0]['name'])->toBe('ResumeStream');
+                ->and($rows[0]['name'])->toBe('ResumeStream')
+            ;
 
             $conn->close();
         });
@@ -142,7 +145,8 @@ describe('Connection', function (): void {
             $conn->pause();
 
             expect($conn->isReady())->toBeTrue()
-                ->and($conn->isClosed())->toBeFalse();
+                ->and($conn->isClosed())->toBeFalse()
+            ;
 
             $conn->resume();
 
@@ -157,7 +161,8 @@ describe('Connection', function (): void {
 
             expect($conn)->toBeInstanceOf(Connection::class)
                 ->and($conn->isReady())->toBeTrue()
-                ->and($conn->isClosed())->toBeFalse();
+                ->and($conn->isClosed())->toBeFalse()
+            ;
 
             $conn->close();
         });
@@ -167,7 +172,8 @@ describe('Connection', function (): void {
             $conn->close();
 
             expect($conn->isClosed())->toBeTrue()
-                ->and($conn->isReady())->toBeFalse();
+                ->and($conn->isReady())->toBeFalse()
+            ;
         });
 
         it('can ping the server', function (): void {
@@ -182,17 +188,18 @@ describe('Connection', function (): void {
     describe('Plain Query', function (): void {
 
         it('executes SELECT 1', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query('SELECT 1 AS val'));
 
             expect($result)->toBeInstanceOf(Result::class)
-                ->and($result->fetchOne()['val'])->toBe('1');
+                ->and($result->fetchOne()['val'])->toBe('1')
+            ;
 
             $conn->close();
         });
 
         it('confirms the test table exists', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query("SHOW TABLES LIKE 'pest_users'"));
 
             expect($result->rowCount())->toBe(1);
@@ -201,13 +208,14 @@ describe('Connection', function (): void {
         });
 
         it('inserts a row and returns affected rows and last insert id', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query(
                 "INSERT INTO pest_users (name, email, age) VALUES ('Alice', 'alice@example.com', 30)"
             ));
 
             expect($result->getAffectedRows())->toBe(1)
-                ->and($result->getLastInsertId())->toBeGreaterThan(0);
+                ->and($result->getLastInsertId())->toBeGreaterThan(0)
+            ;
 
             $conn->close();
         });
@@ -219,12 +227,13 @@ describe('Connection', function (): void {
             ));
 
             $result = await($conn->query('SELECT * FROM pest_users'));
-            $row    = $result->fetchOne();
+            $row = $result->fetchOne();
 
             expect($result->rowCount())->toBe(1)
                 ->and($row['name'])->toBe('Bob')
                 ->and($row['email'])->toBe('bob@example.com')
-                ->and((int) $row['age'])->toBe(25);
+                ->and((int) $row['age'])->toBe(25)
+            ;
 
             $conn->close();
         });
@@ -273,21 +282,23 @@ describe('Connection', function (): void {
             ));
 
             expect($stmt)->toBeInstanceOf(PreparedStatement::class)
-                ->and($stmt->numParams)->toBe(3);
+                ->and($stmt->numParams)->toBe(3)
+            ;
 
             await($stmt->close());
             $conn->close();
         });
 
         it('executes a prepared INSERT', function (): void {
-            $conn   = makeConnection();
-            $stmt   = await($conn->prepare(
+            $conn = makeConnection();
+            $stmt = await($conn->prepare(
                 'INSERT INTO pest_users (name, email, age) VALUES (?, ?, ?)'
             ));
             $result = await($stmt->execute(['Eve', 'eve@example.com', 28]));
 
             expect($result->getAffectedRows())->toBe(1)
-                ->and($result->getLastInsertId())->toBeGreaterThan(0);
+                ->and($result->getLastInsertId())->toBeGreaterThan(0)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -299,15 +310,16 @@ describe('Connection', function (): void {
                 "INSERT INTO pest_users (name, email, age) VALUES ('Frank', 'frank@example.com', 35)"
             ));
 
-            $stmt   = await($conn->prepare(
+            $stmt = await($conn->prepare(
                 'SELECT name, email, age FROM pest_users WHERE email = ?'
             ));
             $result = await($stmt->execute(['frank@example.com']));
-            $row    = $result->fetchOne();
+            $row = $result->fetchOne();
 
             expect($result->rowCount())->toBe(1)
                 ->and($row['name'])->toBe('Frank')
-                ->and((int) $row['age'])->toBe(35);
+                ->and((int) $row['age'])->toBe(35)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -344,8 +356,9 @@ describe('Connection', function (): void {
                 'INSERT INTO pest_users (name, email, age) VALUES (?, ?, ?)'
             ));
 
-            expect(fn() => $stmt->execute(['Judy', 'judy@example.com']))
-                ->toThrow(\InvalidArgumentException::class);
+            expect(fn () => $stmt->execute(['Judy', 'judy@example.com']))
+                ->toThrow(InvalidArgumentException::class)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -357,7 +370,7 @@ describe('Connection', function (): void {
                 "INSERT INTO pest_users (name, email, age) VALUES ('Karl', 'karl@example.com', 50)"
             ));
 
-            $stmt   = await($conn->prepare('UPDATE pest_users SET age = ? WHERE email = ?'));
+            $stmt = await($conn->prepare('UPDATE pest_users SET age = ? WHERE email = ?'));
             $result = await($stmt->execute([51, 'karl@example.com']));
             expect($result->getAffectedRows())->toBe(1);
 
@@ -375,7 +388,7 @@ describe('Connection', function (): void {
                 "INSERT INTO pest_users (name, email, age) VALUES ('Laura', 'laura@example.com', 29)"
             ));
 
-            $stmt   = await($conn->prepare('DELETE FROM pest_users WHERE email = ?'));
+            $stmt = await($conn->prepare('DELETE FROM pest_users WHERE email = ?'));
             $result = await($stmt->execute(['laura@example.com']));
             expect($result->getAffectedRows())->toBe(1);
 
@@ -420,7 +433,8 @@ describe('Connection', function (): void {
 
             expect($rows)->toHaveCount(5)
                 ->and($rows[0]['name'])->toBe('User1')
-                ->and($rows[4]['name'])->toBe('User5');
+                ->and($rows[4]['name'])->toBe('User5')
+            ;
 
             $conn->close();
         });
@@ -444,7 +458,7 @@ describe('Connection', function (): void {
         });
 
         it('streams an empty result set without error', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $stream = await($conn->streamQuery('SELECT * FROM pest_users'));
 
             $count = 0;
@@ -461,7 +475,7 @@ describe('Connection', function (): void {
             $conn = makeConnection();
             seedUsers($conn, 5);
 
-            $stmt   = await($conn->prepare(
+            $stmt = await($conn->prepare(
                 'SELECT name, age FROM pest_users WHERE age > ? ORDER BY age'
             ));
             $stream = await($stmt->executeStream([2]));
@@ -475,7 +489,8 @@ describe('Connection', function (): void {
 
             expect($rows)->toHaveCount(3)
                 ->and($rows[0]['name'])->toBe('User3')
-                ->and($rows[2]['name'])->toBe('User5');
+                ->and($rows[2]['name'])->toBe('User5')
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -512,7 +527,8 @@ describe('Connection', function (): void {
 
             expect($names)->toHaveCount(10)
                 ->and($names[0])->toBe('User1')
-                ->and($names[9])->toBe('User10');
+                ->and($names[9])->toBe('User10')
+            ;
 
             $conn->close();
         });
@@ -523,10 +539,10 @@ describe('Connection', function (): void {
         function makeCustomConnector(): Connector
         {
             return new Connector([
-                'tcp'            => true,
-                'tls'            => false,
-                'unix'           => false,
-                'dns'            => true,
+                'tcp' => true,
+                'tls' => false,
+                'unix' => false,
+                'dns' => true,
                 'happy_eyeballs' => false,
             ]);
         }
@@ -536,7 +552,8 @@ describe('Connection', function (): void {
 
             expect($conn)->toBeInstanceOf(Connection::class)
                 ->and($conn->isReady())->toBeTrue()
-                ->and($conn->isClosed())->toBeFalse();
+                ->and($conn->isClosed())->toBeFalse()
+            ;
 
             $conn->close();
         });
@@ -550,7 +567,7 @@ describe('Connection', function (): void {
         });
 
         it('can execute a plain query using a custom connector', function (): void {
-            $conn   = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
             $result = await($conn->query('SELECT 1 AS val'));
 
             expect($result->fetchOne()['val'])->toBe('1');
@@ -573,7 +590,8 @@ describe('Connection', function (): void {
 
             expect($result->rowCount())->toBe(1)
                 ->and($row['name'])->toBe('CustomConn')
-                ->and((int) $row['age'])->toBe(99);
+                ->and((int) $row['age'])->toBe(99)
+            ;
 
             $conn->close();
         });
@@ -581,13 +599,14 @@ describe('Connection', function (): void {
         it('can use a prepared statement using a custom connector', function (): void {
             $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
 
-            $stmt   = await($conn->prepare(
+            $stmt = await($conn->prepare(
                 'INSERT INTO pest_users (name, email, age) VALUES (?, ?, ?)'
             ));
             $result = await($stmt->execute(['ConnUser', 'connuser@example.com', 55]));
 
             expect($result->getAffectedRows())->toBe(1)
-                ->and($result->getLastInsertId())->toBeGreaterThan(0);
+                ->and($result->getLastInsertId())->toBeGreaterThan(0)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -610,22 +629,24 @@ describe('Connection', function (): void {
             }
 
             expect($rows)->toHaveCount(1)
-                ->and($rows[0]['name'])->toBe('StreamConn');
+                ->and($rows[0]['name'])->toBe('StreamConn')
+            ;
 
             $conn->close();
         });
 
         it('rejects connection with wrong credentials using a custom connector', function (): void {
             $badParams = ConnectionParams::fromArray([
-                'host'     => $_ENV['MYSQL_HOST']     ?? '127.0.0.1',
-                'port'     => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+                'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+                'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
                 'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
                 'username' => 'wrong_user',
                 'password' => 'wrong_password',
             ]);
 
-            expect(fn() => await(Connection::create($badParams, makeCustomConnector())))
-                ->toThrow(ConnectionException::class);
+            expect(fn () => await(Connection::create($badParams, makeCustomConnector())))
+                ->toThrow(ConnectionException::class)
+            ;
         });
     });
 
@@ -644,7 +665,8 @@ describe('Connection', function (): void {
             $result = await($verify->query("SELECT * FROM pest_users WHERE email = 'tom@example.com'"));
 
             expect($result->rowCount())->toBe(1)
-                ->and($result->fetchOne()['name'])->toBe('Tom');
+                ->and($result->fetchOne()['name'])->toBe('Tom')
+            ;
 
             $conn->close();
             $verify->close();
@@ -709,10 +731,11 @@ describe('Connection', function (): void {
 
             $verify = makeConnection();
             $result = await($verify->query('SELECT name FROM pest_users ORDER BY name'));
-            $names  = array_column($result->fetchAll(), 'name');
+            $names = array_column($result->fetchAll(), 'name');
 
             expect($names)->toBe(['Dana'])
-                ->and($result->rowCount())->toBe(1);
+                ->and($result->rowCount())->toBe(1)
+            ;
 
             $conn->close();
             $verify->close();
@@ -785,10 +808,11 @@ describe('Connection', function (): void {
 
             $verify = makeConnection();
             $result = await($verify->query('SELECT name FROM pest_users ORDER BY name'));
-            $names  = array_column($result->fetchAll(), 'name');
+            $names = array_column($result->fetchAll(), 'name');
 
             expect($names)->toBe(['Hank'])
-                ->and($result->rowCount())->toBe(1);
+                ->and($result->rowCount())->toBe(1)
+            ;
 
             $conn->close();
             $verify->close();
@@ -878,7 +902,7 @@ describe('Connection', function (): void {
             await($conn->query('CREATE TABLE pest_alter (id INT PRIMARY KEY)'));
             await($conn->query('ALTER TABLE pest_alter ADD COLUMN label VARCHAR(50)'));
 
-            $result  = await($conn->query('DESCRIBE pest_alter'));
+            $result = await($conn->query('DESCRIBE pest_alter'));
             $columns = array_column($result->fetchAll(), 'Field');
 
             expect($columns)->toContain('label');
@@ -912,11 +936,12 @@ describe('Connection', function (): void {
             ));
 
             $result = await($conn->query('SELECT name FROM pest_users ORDER BY name'));
-            $all    = $result->fetchAll();
+            $all = $result->fetchAll();
 
             expect($all)->toHaveCount(2)
                 ->and($all[0]['name'])->toBe('Leo')
-                ->and($all[1]['name'])->toBe('Mia');
+                ->and($all[1]['name'])->toBe('Mia')
+            ;
 
             $conn->close();
         });
@@ -928,28 +953,30 @@ describe('Connection', function (): void {
             ));
 
             $result = await($conn->query('SELECT name FROM pest_users'));
-            $row1   = $result->fetchAssoc();
-            $row2   = $result->fetchAssoc();
+            $row1 = $result->fetchAssoc();
+            $row2 = $result->fetchAssoc();
 
             expect($row1)->toBeArray()
                 ->and($row1['name'])->toBe('Nina')
-                ->and($row2)->toBeNull();
+                ->and($row2)->toBeNull()
+            ;
 
             $conn->close();
         });
 
         it('isEmpty returns true when no rows match', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query('SELECT * FROM pest_users'));
 
             expect($result->isEmpty())->toBeTrue()
-                ->and($result->rowCount())->toBe(0);
+                ->and($result->rowCount())->toBe(0)
+            ;
 
             $conn->close();
         });
 
         it('getColumnCount returns the number of selected columns', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query('SELECT 1 AS a, 2 AS b, 3 AS c'));
 
             expect($result->getColumnCount())->toBe(3);
@@ -966,7 +993,7 @@ describe('Connection', function (): void {
             ));
 
             $result = await($conn->query('SELECT name FROM pest_users ORDER BY name'));
-            $names  = $result->fetchColumn('name');
+            $names = $result->fetchColumn('name');
 
             expect($names)->toBe(['Oscar', 'Paula']);
 
@@ -974,7 +1001,7 @@ describe('Connection', function (): void {
         });
 
         it('getWarningCount is accessible', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $result = await($conn->query('SELECT 1'));
 
             expect($result->getWarningCount())->toBeInt();

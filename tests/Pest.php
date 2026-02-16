@@ -2,13 +2,14 @@
 
 declare(strict_types=1);
 
+use function Hibla\await;
+
 use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\MysqlClient;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
 
-use function Hibla\await;
+use Hibla\Mysql\ValueObjects\ConnectionParams;
 
 uses()
     ->afterEach(function () {
@@ -94,8 +95,8 @@ function buildMySQLErrPacket(int $errorCode, string $errorMessage): string
 function testConnectionParams(): ConnectionParams
 {
     return ConnectionParams::fromArray([
-        'host'     => $_ENV['MYSQL_HOST']     ?? '127.0.0.1',
-        'port'     => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+        'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+        'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
         'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
         'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',

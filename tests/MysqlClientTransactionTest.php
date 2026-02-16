@@ -2,12 +2,13 @@
 
 declare(strict_types=1);
 
+use function Hibla\await;
+
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Sql\Exceptions\TransactionException;
 use Hibla\Sql\IsolationLevel;
-use Hibla\Sql\Transaction as TransactionInterface;
 
-use function Hibla\await;
+use Hibla\Sql\Transaction as TransactionInterface;
 
 beforeAll(function (): void {
     $client = makeTransactionClient();
@@ -38,10 +39,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('returns a Transaction instance', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             expect($tx)->toBeInstanceOf(TransactionInterface::class)
-                ->and($tx->isActive())->toBeTrue();
+                ->and($tx->isActive())->toBeTrue()
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -49,10 +51,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('transaction is active after begin', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             expect($tx->isActive())->toBeTrue()
-                ->and($tx->isClosed())->toBeFalse();
+                ->and($tx->isClosed())->toBeFalse()
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -60,7 +63,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('begins a transaction with READ UNCOMMITTED isolation level', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction(IsolationLevel::READ_UNCOMMITTED));
+            $tx = await($client->beginTransaction(IsolationLevel::READ_UNCOMMITTED));
 
             expect($tx->isActive())->toBeTrue();
 
@@ -70,7 +73,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('begins a transaction with READ COMMITTED isolation level', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction(IsolationLevel::READ_COMMITTED));
+            $tx = await($client->beginTransaction(IsolationLevel::READ_COMMITTED));
 
             expect($tx->isActive())->toBeTrue();
 
@@ -80,7 +83,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('begins a transaction with REPEATABLE READ isolation level', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction(IsolationLevel::REPEATABLE_READ));
+            $tx = await($client->beginTransaction(IsolationLevel::REPEATABLE_READ));
 
             expect($tx->isActive())->toBeTrue();
 
@@ -90,7 +93,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('begins a transaction with SERIALIZABLE isolation level', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction(IsolationLevel::SERIALIZABLE));
+            $tx = await($client->beginTransaction(IsolationLevel::SERIALIZABLE));
 
             expect($tx->isActive())->toBeTrue();
 
@@ -100,7 +103,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('releases the connection back to pool after beginTransaction fails', function (): void {
             $client = makeTransactionClient(maxConnections: 1);
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
@@ -116,7 +119,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('commits a transaction and persists data', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('committed')"));
             await($tx->commit());
@@ -130,7 +133,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('transaction is no longer active after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('x')"));
             await($tx->commit());
@@ -142,7 +145,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('releases the connection back to pool after commit', function (): void {
             $client = makeTransactionClient(maxConnections: 1);
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('pool_check')"));
             await($tx->commit());
@@ -157,19 +160,20 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when committing an already committed transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->commit());
 
-            expect(fn() => await($tx->commit()))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->commit()))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
 
         it('commits multiple inserts atomically', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('row1')"));
             await($tx->query("INSERT INTO tx_test (value) VALUES ('row2')"));
@@ -188,7 +192,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('rolls back a transaction and discards data', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('rolled_back')"));
             await($tx->rollback());
@@ -202,7 +206,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('transaction is no longer active after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
@@ -213,7 +217,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('releases the connection back to pool after rollback', function (): void {
             $client = makeTransactionClient(maxConnections: 1);
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('will_rollback')"));
             await($tx->rollback());
@@ -228,12 +232,13 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when rolling back an already rolled back transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
-            expect(fn() => await($tx->rollback()))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->rollback()))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -261,7 +266,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('executes a plain query without params inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $result = await($tx->query('SELECT 1 AS val'));
 
             expect($result->fetchOne()['val'])->toBe('1');
@@ -272,7 +277,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('executes a query with params inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $result = await($tx->query('SELECT ? AS val', [42]));
 
             expect($result->fetchOne()['val'])->toBe(42);
@@ -283,7 +288,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('execute() returns affected rows inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             $affected = await($tx->execute("INSERT INTO tx_test (value) VALUES ('exec_test')"));
 
@@ -294,8 +299,8 @@ describe('MysqlClient Transaction', function (): void {
         });
 
         it('executeGetId() returns last insert id inside transaction', function (): void {
-            $client   = makeTransactionClient();
-            $tx       = await($client->beginTransaction());
+            $client = makeTransactionClient();
+            $tx = await($client->beginTransaction());
             $insertId = await($tx->executeGetId("INSERT INTO tx_test (value) VALUES ('id_test')"));
 
             expect($insertId)->toBeGreaterThan(0);
@@ -306,7 +311,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('fetchOne() returns the first row inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('fetch_one')"));
 
@@ -320,8 +325,8 @@ describe('MysqlClient Transaction', function (): void {
 
         it('fetchOne() returns null when no rows match inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $row    = await($tx->fetchOne('SELECT 1 WHERE 1 = 0'));
+            $tx = await($client->beginTransaction());
+            $row = await($tx->fetchOne('SELECT 1 WHERE 1 = 0'));
 
             expect($row)->toBeNull();
 
@@ -331,8 +336,8 @@ describe('MysqlClient Transaction', function (): void {
 
         it('fetchValue() returns a named column value inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $value  = await($tx->fetchValue('SELECT 99 AS answer', 'answer'));
+            $tx = await($client->beginTransaction());
+            $value = await($tx->fetchValue('SELECT 99 AS answer', 'answer'));
 
             expect($value)->toBe('99');
 
@@ -342,8 +347,8 @@ describe('MysqlClient Transaction', function (): void {
 
         it('fetchValue() returns null when no rows match inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $value  = await($tx->fetchValue('SELECT 1 WHERE 1 = 0', 'answer'));
+            $tx = await($client->beginTransaction());
+            $value = await($tx->fetchValue('SELECT 1 WHERE 1 = 0', 'answer'));
 
             expect($value)->toBeNull();
 
@@ -353,24 +358,26 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when querying after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->commit());
 
-            expect(fn() => await($tx->query('SELECT 1')))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->query('SELECT 1')))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
 
         it('throws TransactionException when querying after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
-            expect(fn() => await($tx->query('SELECT 1')))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->query('SELECT 1')))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -380,7 +387,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('streams rows without params inside a transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('s1'), ('s2'), ('s3')"));
 
@@ -399,7 +406,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('streams rows with params inside a transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('stream_param')"));
 
@@ -411,7 +418,8 @@ describe('MysqlClient Transaction', function (): void {
             }
 
             expect($rows)->toHaveCount(1)
-                ->and($rows[0]['value'])->toBe('stream_param');
+                ->and($rows[0]['value'])->toBe('stream_param')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -419,7 +427,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('streams an empty result set without error inside a transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $stream = await($tx->stream('SELECT value FROM tx_test WHERE value = ?', ['nonexistent']));
 
             $rows = [];
@@ -435,12 +443,13 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when streaming after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->commit());
 
-            expect(fn() => await($tx->stream('SELECT 1')))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->stream('SELECT 1')))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -450,8 +459,8 @@ describe('MysqlClient Transaction', function (): void {
 
         it('returns a PreparedStatement inside a transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $stmt   = await($tx->prepare('SELECT ? AS val'));
+            $tx = await($client->beginTransaction());
+            $stmt = await($tx->prepare('SELECT ? AS val'));
 
             expect($stmt)->toBeInstanceOf(PreparedStatement::class);
 
@@ -462,8 +471,8 @@ describe('MysqlClient Transaction', function (): void {
 
         it('executes a prepared statement multiple times inside transaction', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $stmt   = await($tx->prepare('INSERT INTO tx_test (value) VALUES (?)'));
+            $tx = await($client->beginTransaction());
+            $stmt = await($tx->prepare('INSERT INTO tx_test (value) VALUES (?)'));
 
             await($stmt->execute(['prepared_1']));
             await($stmt->execute(['prepared_2']));
@@ -479,12 +488,13 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when preparing after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
-            expect(fn() => await($tx->prepare('SELECT 1')))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->prepare('SELECT 1')))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -494,7 +504,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('creates a savepoint without error', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->savepoint('sp1'));
 
@@ -506,7 +516,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('rolls back to a savepoint discarding changes after it', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('before_savepoint')"));
             await($tx->savepoint('sp1'));
@@ -523,7 +533,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('releases a savepoint without error', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->savepoint('sp_release'));
             await($tx->releaseSavepoint('sp_release'));
@@ -536,7 +546,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('supports multiple savepoints and partial rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->query("INSERT INTO tx_test (value) VALUES ('base')"));
             await($tx->savepoint('sp1'));
@@ -555,10 +565,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException for empty savepoint identifier', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
-            expect(fn() => await($tx->savepoint('')))
-                ->toThrow(\InvalidArgumentException::class, 'Savepoint identifier cannot be empty');
+            expect(fn () => await($tx->savepoint('')))
+                ->toThrow(InvalidArgumentException::class, 'Savepoint identifier cannot be empty')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -566,10 +577,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws InvalidArgumentException for savepoint identifier that is too long', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
-            expect(fn() => await($tx->savepoint(str_repeat('a', 65))))
-                ->toThrow(\InvalidArgumentException::class, 'Savepoint identifier too long');
+            expect(fn () => await($tx->savepoint(str_repeat('a', 65))))
+                ->toThrow(InvalidArgumentException::class, 'Savepoint identifier too long')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -577,10 +589,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws InvalidArgumentException for savepoint identifier with null byte', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
-            expect(fn() => await($tx->savepoint("sp\x00name")))
-                ->toThrow(\InvalidArgumentException::class, 'invalid byte values');
+            expect(fn () => await($tx->savepoint("sp\x00name")))
+                ->toThrow(InvalidArgumentException::class, 'invalid byte values')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -588,10 +601,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws InvalidArgumentException for savepoint identifier with leading whitespace', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
-            expect(fn() => await($tx->savepoint(' sp1')))
-                ->toThrow(\InvalidArgumentException::class, 'cannot start or end with spaces');
+            expect(fn () => await($tx->savepoint(' sp1')))
+                ->toThrow(InvalidArgumentException::class, 'cannot start or end with spaces')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -599,10 +613,11 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws InvalidArgumentException for savepoint identifier with trailing whitespace', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
-            expect(fn() => await($tx->savepoint('sp1 ')))
-                ->toThrow(\InvalidArgumentException::class, 'cannot start or end with spaces');
+            expect(fn () => await($tx->savepoint('sp1 ')))
+                ->toThrow(InvalidArgumentException::class, 'cannot start or end with spaces')
+            ;
 
             await($tx->rollback());
             $client->close();
@@ -610,7 +625,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('accepts a savepoint identifier at exactly 64 characters', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->savepoint(str_repeat('a', 64)));
 
@@ -622,12 +637,13 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when creating savepoint after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->commit());
 
-            expect(fn() => await($tx->savepoint('sp1')))
-                ->toThrow(TransactionException::class);
+            expect(fn () => await($tx->savepoint('sp1')))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -636,9 +652,9 @@ describe('MysqlClient Transaction', function (): void {
     describe('Callbacks', function (): void {
 
         it('onCommit callback is fired after successful commit', function (): void {
-            $client  = makeTransactionClient();
-            $tx      = await($client->beginTransaction());
-            $called  = false;
+            $client = makeTransactionClient();
+            $tx = await($client->beginTransaction());
+            $called = false;
 
             $tx->onCommit(function () use (&$called): void {
                 $called = true;
@@ -653,7 +669,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('onRollback callback is fired after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $called = false;
 
             $tx->onRollback(function () use (&$called): void {
@@ -669,7 +685,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('onCommit callback is NOT fired after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $called = false;
 
             $tx->onCommit(function () use (&$called): void {
@@ -685,7 +701,7 @@ describe('MysqlClient Transaction', function (): void {
 
         it('onRollback callback is NOT fired after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
             $called = false;
 
             $tx->onRollback(function () use (&$called): void {
@@ -701,12 +717,18 @@ describe('MysqlClient Transaction', function (): void {
 
         it('multiple onCommit callbacks all fire in order', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $order  = [];
+            $tx = await($client->beginTransaction());
+            $order = [];
 
-            $tx->onCommit(function () use (&$order): void { $order[] = 1; });
-            $tx->onCommit(function () use (&$order): void { $order[] = 2; });
-            $tx->onCommit(function () use (&$order): void { $order[] = 3; });
+            $tx->onCommit(function () use (&$order): void {
+                $order[] = 1;
+            });
+            $tx->onCommit(function () use (&$order): void {
+                $order[] = 2;
+            });
+            $tx->onCommit(function () use (&$order): void {
+                $order[] = 3;
+            });
 
             await($tx->commit());
 
@@ -717,12 +739,18 @@ describe('MysqlClient Transaction', function (): void {
 
         it('multiple onRollback callbacks all fire in order', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
-            $order  = [];
+            $tx = await($client->beginTransaction());
+            $order = [];
 
-            $tx->onRollback(function () use (&$order): void { $order[] = 1; });
-            $tx->onRollback(function () use (&$order): void { $order[] = 2; });
-            $tx->onRollback(function () use (&$order): void { $order[] = 3; });
+            $tx->onRollback(function () use (&$order): void {
+                $order[] = 1;
+            });
+            $tx->onRollback(function () use (&$order): void {
+                $order[] = 2;
+            });
+            $tx->onRollback(function () use (&$order): void {
+                $order[] = 3;
+            });
 
             await($tx->rollback());
 
@@ -733,24 +761,28 @@ describe('MysqlClient Transaction', function (): void {
 
         it('throws TransactionException when registering onCommit after commit', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->commit());
 
-            expect(fn() => $tx->onCommit(function (): void {}))
-                ->toThrow(TransactionException::class);
+            expect(fn () => $tx->onCommit(function (): void {
+            }))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
 
         it('throws TransactionException when registering onRollback after rollback', function (): void {
             $client = makeTransactionClient();
-            $tx     = await($client->beginTransaction());
+            $tx = await($client->beginTransaction());
 
             await($tx->rollback());
 
-            expect(fn() => $tx->onRollback(function (): void {}))
-                ->toThrow(TransactionException::class);
+            expect(fn () => $tx->onRollback(function (): void {
+            }))
+                ->toThrow(TransactionException::class)
+            ;
 
             $client->close();
         });
@@ -794,7 +826,8 @@ describe('MysqlClient Transaction', function (): void {
 
             $result = await($client->transaction(function (TransactionInterface $tx) {
                 return await($tx->query("INSERT INTO tx_test (value) VALUES ('helper_commit')"))
-                    ->getAffectedRows();
+                    ->getAffectedRows()
+                ;
             }));
 
             expect($result)->toBe(1);
@@ -812,9 +845,10 @@ describe('MysqlClient Transaction', function (): void {
             try {
                 await($client->transaction(function (TransactionInterface $tx): void {
                     await($tx->query("INSERT INTO tx_test (value) VALUES ('will_rollback')"));
-                    throw new \RuntimeException('intentional failure');
+
+                    throw new RuntimeException('intentional failure');
                 }));
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 
@@ -830,23 +864,24 @@ describe('MysqlClient Transaction', function (): void {
 
             expect(function () use ($client): void {
                 await($client->transaction(function (): void {
-                    throw new \RuntimeException('original error');
+                    throw new RuntimeException('original error');
                 }));
-            })->toThrow(\RuntimeException::class, 'original error');
+            })->toThrow(RuntimeException::class, 'original error');
 
             $client->close();
         });
 
         it('retries the specified number of times on failure', function (): void {
-            $client  = makeTransactionClient();
+            $client = makeTransactionClient();
             $attempts = 0;
 
             try {
                 await($client->transaction(function () use (&$attempts): void {
                     $attempts++;
-                    throw new \RuntimeException('always fails');
+
+                    throw new RuntimeException('always fails');
                 }, attempts: 3));
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 
@@ -856,19 +891,21 @@ describe('MysqlClient Transaction', function (): void {
         });
 
         it('succeeds on a later retry after initial failures', function (): void {
-            $client  = makeTransactionClient();
+            $client = makeTransactionClient();
             $attempt = 0;
 
             $result = await($client->transaction(function (TransactionInterface $tx) use (&$attempt) {
                 $attempt++;
                 if ($attempt < 3) {
-                    throw new \RuntimeException('not yet');
+                    throw new RuntimeException('not yet');
                 }
+
                 return await($tx->fetchOne('SELECT 1 AS val'));
             }, attempts: 3));
 
             expect($attempt)->toBe(3)
-                ->and($result['val'])->toBe('1');
+                ->and($result['val'])->toBe('1')
+            ;
 
             $client->close();
         });
@@ -876,8 +913,9 @@ describe('MysqlClient Transaction', function (): void {
         it('throws InvalidArgumentException when attempts is less than 1', function (): void {
             $client = makeTransactionClient();
 
-            expect(fn() => $client->transaction(fn() => null, attempts: 0))
-                ->toThrow(\InvalidArgumentException::class, 'Attempts must be at least 1');
+            expect(fn () => $client->transaction(fn () => null, attempts: 0))
+                ->toThrow(InvalidArgumentException::class, 'Attempts must be at least 1')
+            ;
 
             $client->close();
         });
@@ -917,9 +955,9 @@ describe('MysqlClient Transaction', function (): void {
 
             try {
                 await($client->transaction(function (): void {
-                    throw new \RuntimeException('fail');
+                    throw new RuntimeException('fail');
                 }));
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 

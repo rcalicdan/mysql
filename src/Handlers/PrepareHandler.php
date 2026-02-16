@@ -18,17 +18,17 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 final class PrepareHandler
 {
     /**
-     *  @var array<int, ColumnDefinition> 
+     *  @var array<int, ColumnDefinition>
      */
     private array $columnDefinitions = [];
 
     /**
-     *  @var array<int, ColumnDefinition> 
+     *  @var array<int, ColumnDefinition>
      */
     private array $paramDefinitions = [];
 
     /**
-     *  @var Promise<PreparedStatement>|null 
+     *  @var Promise<PreparedStatement>|null
      */
     private ?Promise $currentPromise = null;
 
@@ -46,7 +46,8 @@ final class PrepareHandler
         private readonly MysqlConnection $connection,
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     /**
      * @param Promise<PreparedStatement> $promise

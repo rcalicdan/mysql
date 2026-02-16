@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use function Hibla\async;
+
 use Hibla\Mysql\Enums\ConnectionState;
 use Hibla\Mysql\Handlers\ExecuteHandler;
 use Hibla\Mysql\Handlers\HandshakeHandler;
@@ -27,9 +29,8 @@ use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 use SplQueue;
-use Throwable;
 
-use function Hibla\async;
+use Throwable;
 
 /**
  * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
@@ -50,7 +51,7 @@ use function Hibla\async;
 class Connection
 {
     /**
-     *  @var SplQueue<CommandRequest>
+     * @var SplQueue<CommandRequest> Queue of commands waiting for execution.
      */
     private SplQueue $commandQueue;
 
@@ -80,8 +81,24 @@ class Connection
     private readonly ConnectionParams $params;
 
     private bool $isClosingError = false;
-
+    
     private bool $isUserClosing = false;
+
+    /**
+     * The MySQL server thread ID for this connection, received during handshake.
+     * Used to send KILL QUERY on cancellation.
+     */
+    private int $threadId = 0;
+
+    /**
+     * Set to true when a query was cancelled mid-execution via KILL QUERY.
+     *
+     * The pool MUST check this via wasQueryCancelled() and run:
+     *   DO SLEEP(0)
+     * before returning this connection to normal use. This absorbs the stale
+     * KILL flag that MySQL sets when KILL QUERY arrives after the query finishes.
+     */
+    private bool $wasQueryCancelled = false;
 
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
@@ -154,9 +171,6 @@ class Connection
 
     /**
      * Pauses the connection by pausing the socket stream.
-     *
-     * This removes the socket from the Event Loop's read watcher.
-     * If all connections are suspended, the Event Loop will automatically exit.
      */
     public function pause(): void
     {
@@ -165,8 +179,6 @@ class Connection
 
     /**
      * Resumes the connection by un-pausing the socket stream.
-     *
-     * This re-adds the socket to the Event Loop to receive data.
      */
     public function resume(): void
     {
@@ -174,9 +186,37 @@ class Connection
     }
 
     /**
+     * Returns the MySQL server thread ID for this connection.
+     * Available after the handshake completes (i.e. after connect() resolves).
+     */
+    public function getThreadId(): int
+    {
+        return $this->threadId;
+    }
+
+    /**
+     * Returns true if a query was cancelled via KILL QUERY on this connection.
+     *
+     * When true, the connection pool MUST issue DO SLEEP(0) before reuse to
+     * absorb any stale KILL flag left by MySQL if the kill arrived after the
+     * query had already finished.
+     */
+    public function wasQueryCancelled(): bool
+    {
+        return $this->wasQueryCancelled;
+    }
+
+    /**
+     * Clears the cancelled flag after the pool has absorbed the stale kill.
+     */
+    public function clearCancelledFlag(): void
+    {
+        $this->wasQueryCancelled = false;
+    }
+
+    /**
      * Executes a standard SQL query (buffered).
      *
-     * @param string $sql
      * @return PromiseInterface<Result>
      */
     public function query(string $sql): PromiseInterface
@@ -188,14 +228,6 @@ class Connection
     /**
      * Streams a SELECT query row-by-row using a Generator.
      *
-     * @param string $sql
-     * @return PromiseInterface<RowStream>
-     */
-    /**
-     * Streams a SELECT query row-by-row using a Generator.
-     *
-     * @param string $sql
-     * @param int $bufferSize Maximum rows to buffer before applying backpressure (default: 100)
      * @return PromiseInterface<RowStream>
      */
     public function streamQuery(string $sql, int $bufferSize = 100): PromiseInterface
@@ -235,7 +267,6 @@ class Connection
     /**
      * Prepares a SQL statement.
      *
-     * @param string $sql
      * @return PromiseInterface<PreparedStatement>
      */
     public function prepare(string $sql): PromiseInterface
@@ -257,8 +288,6 @@ class Connection
 
     /**
      * Closes the connection and releases resources.
-     *
-     * @return void
      */
     public function close(): void
     {
@@ -391,10 +420,102 @@ class Connection
         mixed $context = null
     ): PromiseInterface {
         $promise = new Promise();
-        $this->commandQueue->enqueue(new CommandRequest($type, $promise, $sql, $params, $stmtId, $context));
+        $command = new CommandRequest($type, $promise, $sql, $params, $stmtId, $context);
+        $this->commandQueue->enqueue($command);
         $this->processNextCommand();
 
+        $promise->onCancel(function () use ($command): void {
+            $this->handleCommandCancellation($command);
+        });
+
         return $promise;
+    }
+
+    /**
+     * Handles all edge cases when a command promise is cancelled.
+     *
+     * Case 1 — Command still in queue (not yet started):
+     *   Just remove it. No server interaction needed.
+     *
+     * Case 2 — Command is currently executing:
+     *   - Mark the connection as cancelled (pool must absorb stale kill flag)
+     *   - Fire KILL QUERY on a separate connection (best-effort, async)
+     *   - IMPORTANT: Does NOT change connection state. The state will be reset
+     *     by the internal "protocol promise" when the server's ERR packet arrives.
+     */
+    private function handleCommandCancellation(CommandRequest $command): void
+    {
+        // Case 1: still in queue, hasn't started yet
+        if ($this->removeFromQueue($command)) {
+            return;
+        }
+
+        // Case 2: currently executing
+        if ($this->currentCommand === $command) {
+            $isKillable = \in_array($command->type, [
+                CommandRequest::TYPE_QUERY,
+                CommandRequest::TYPE_STREAM_QUERY,
+                CommandRequest::TYPE_EXECUTE,
+                CommandRequest::TYPE_EXECUTE_STREAM,
+            ], true);
+
+            if ($isKillable && $this->threadId > 0 && ! $this->isClosed()) {
+                $this->wasQueryCancelled = true;
+                $this->dispatchKillQuery($this->threadId);
+            }
+        }
+    }
+
+    /**
+     * Attempts to remove a command from the queue.
+     *
+     * @return bool true if the command was found and removed, false if not in queue
+     */
+    private function removeFromQueue(CommandRequest $command): bool
+    {
+        $found = false;
+        $temp = new SplQueue();
+
+        while (! $this->commandQueue->isEmpty()) {
+            $cmd = $this->commandQueue->dequeue();
+
+            if ($cmd === $command) {
+                $found = true;
+            } else {
+                $temp->enqueue($cmd);
+            }
+        }
+
+        while (! $temp->isEmpty()) {
+            $this->commandQueue->enqueue($temp->dequeue());
+        }
+
+        return $found;
+    }
+
+    /**
+     * Opens a dedicated second connection and sends KILL QUERY <threadId>.
+     * This is intentionally fire-and-forget for maximum robustness.
+     */
+    private function dispatchKillQuery(int $threadId): void
+    {
+        Connection::create($this->params)->then(
+            function (Connection $killConn) use ($threadId): void {
+                $killConn->query("KILL QUERY {$threadId}")
+                    ->then(
+                        function () use ($killConn): void {
+                            $killConn->close();
+                        },
+                        function () use ($killConn): void {
+                            $killConn->close();
+                        }
+                    )
+                ;
+            },
+            function (): void {
+                // Could not open kill connection. Query will run to completion.
+            }
+        );
     }
 
     private function handleSocketConnected(SocketConnection $socket): void
@@ -427,15 +548,23 @@ class Connection
 
     private function handleHandshakeSuccess(int $nextSeqId): void
     {
+        $this->threadId = $this->handshakeHandler?->getThreadId() ?? 0;
         $this->state = ConnectionState::READY;
 
         if ($this->connectPromise !== null) {
             $this->connectPromise->resolve($this);
             $this->connectPromise = null;
         }
+
         $this->processNextCommand();
     }
 
+    /**
+     * Dequeues and starts the next command.
+     * This method decouples the user-facing promise from the internal protocol promise
+     * to ensure the connection state is only reset after the server has fully responded,
+     * even during cancellation.
+     */
     private function processNextCommand(): void
     {
         if ($this->state !== ConnectionState::READY || $this->currentCommand !== null || $this->commandQueue->isEmpty()) {
@@ -443,28 +572,33 @@ class Connection
         }
 
         $this->currentCommand = $this->commandQueue->dequeue();
-
         $command = $this->currentCommand;
+
+        /** @var Promise<mixed> $protocolPromise */
+        $protocolPromise = new Promise();
+
+        $protocolPromise->finally(function () {
+            $this->finishCommand();
+        });
+
+        $protocolPromise->then(
+            fn ($v) => $command->promise->resolve($v),
+            fn ($e) => $command->promise->reject($e)
+        );
 
         switch ($command->type) {
             case CommandRequest::TYPE_QUERY:
                 $this->state = ConnectionState::QUERYING;
                 if ($this->queryHandler !== null) {
-                    /** @var Promise<Result> $promise */
-                    $promise = $command->promise;
-                    $this->queryHandler->start($command->sql, $promise);
+                    $this->queryHandler->start($command->sql, $protocolPromise);
                 }
 
                 break;
 
             case CommandRequest::TYPE_STREAM_QUERY:
                 $this->state = ConnectionState::QUERYING;
-                /** @var StreamContext $streamContext */
-                $streamContext = $command->context;
                 if ($this->queryHandler !== null) {
-                    /** @var Promise<StreamStats> $promise */
-                    $promise = $command->promise;
-                    $this->queryHandler->start($command->sql, $promise, $streamContext);
+                    $this->queryHandler->start($command->sql, $protocolPromise, $command->context);
                 }
 
                 break;
@@ -472,9 +606,7 @@ class Connection
             case CommandRequest::TYPE_PING:
                 $this->state = ConnectionState::PINGING;
                 if ($this->pingHandler !== null) {
-                    /** @var Promise<bool> $promise */
-                    $promise = $command->promise;
-                    $this->pingHandler->start($promise);
+                    $this->pingHandler->start($protocolPromise);
                 }
 
                 break;
@@ -482,9 +614,7 @@ class Connection
             case CommandRequest::TYPE_PREPARE:
                 $this->state = ConnectionState::PREPARING;
                 if ($this->prepareHandler !== null) {
-                    /** @var Promise<PreparedStatement> $promise */
-                    $promise = $command->promise;
-                    $this->prepareHandler->start($command->sql, $promise);
+                    $this->prepareHandler->start($command->sql, $protocolPromise);
                 }
 
                 break;
@@ -494,16 +624,7 @@ class Connection
                 /** @var PreparedStatement $stmt */
                 $stmt = $command->context;
                 if ($this->executeHandler !== null) {
-                    /** @var Promise<Result> $promise */
-                    $promise = $command->promise;
-                    /** @var array<int, mixed> $params */
-                    $params = $command->params;
-                    $this->executeHandler->start(
-                        $stmt->id,
-                        $params,
-                        $stmt->columnDefinitions,
-                        $promise
-                    );
+                    $this->executeHandler->start($stmt->id, $command->params, $stmt->columnDefinitions, $protocolPromise);
                 }
 
                 break;
@@ -512,19 +633,8 @@ class Connection
                 $this->state = ConnectionState::EXECUTING;
                 /** @var ExecuteStreamContext $ctx */
                 $ctx = $command->context;
-
                 if ($this->executeHandler !== null) {
-                    /** @var Promise<StreamStats> $promise */
-                    $promise = $command->promise;
-                    /** @var array<int, mixed> $params */
-                    $params = $command->params;
-                    $this->executeHandler->start(
-                        $ctx->statement->id,
-                        $params,
-                        $ctx->statement->columnDefinitions,
-                        $promise,
-                        $ctx->streamContext
-                    );
+                    $this->executeHandler->start($ctx->statement->id, $command->params, $ctx->statement->columnDefinitions, $protocolPromise, $ctx->streamContext);
                 }
 
                 break;
@@ -532,16 +642,10 @@ class Connection
             case CommandRequest::TYPE_CLOSE_STMT:
                 $this->sendClosePacket($command->statementId);
                 $command->promise->resolve(null);
-                $this->currentCommand = null;
-                $this->processNextCommand();
+                $this->finishCommand();
 
                 return;
         }
-
-        $command->promise->then(
-            $this->finishCommand(...),
-            $this->finishCommand(...)
-        );
     }
 
     private function finishCommand(): void
@@ -568,29 +672,21 @@ class Connection
             if ($this->packetReader === null) {
                 return;
             }
-
             $this->packetReader->append($chunk);
-
             while ($this->packetReader->hasPacket()) {
                 $success = $this->packetReader->readPayload(function (mixed $payloadReader, mixed $length, mixed $seq): void {
-                    if (
-                        !($payloadReader instanceof \Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader) ||
-                        !\is_int($length) ||
-                        !\is_int($seq)
-                    ) {
+                    if (! ($payloadReader instanceof \Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader) || ! \is_int($length) || ! \is_int($seq)) {
                         return;
                     }
-
                     match ($this->state) {
                         ConnectionState::CONNECTING => $this->handshakeHandler?->processPacket($payloadReader, $length, $seq),
                         ConnectionState::QUERYING => $this->queryHandler?->processPacket($payloadReader, $length, $seq),
                         ConnectionState::PINGING => $this->pingHandler?->processPacket($payloadReader, $length, $seq),
                         ConnectionState::PREPARING => $this->prepareHandler?->processPacket($payloadReader, $length, $seq),
                         ConnectionState::EXECUTING => $this->executeHandler?->processPacket($payloadReader, $length, $seq),
-                        default => null
+                        default => null,
                     };
                 });
-
                 if (! $success) {
                     break;
                 }
@@ -602,12 +698,7 @@ class Connection
 
     private function handleConnectionError(Throwable $e): void
     {
-        $wrappedException = new ConnectionException(
-            'Failed to connect to MySQL server at ' . $this->params->host . ':' . $this->params->port . ': ' . $e->getMessage(),
-            (int)$e->getCode(),
-            $e
-        );
-
+        $wrappedException = new ConnectionException('Failed to connect to MySQL server at ' . $this->params->host . ':' . $this->params->port . ': ' . $e->getMessage(), (int)$e->getCode(), $e);
         $this->handleError($wrappedException);
     }
 
@@ -627,10 +718,8 @@ class Connection
         if ($this->isClosingError) {
             return;
         }
-
         $this->isClosingError = true;
         $this->state = ConnectionState::CLOSED;
-
         if ($this->connectPromise !== null) {
             $this->connectPromise->reject($e);
             $this->connectPromise = null;
@@ -640,9 +729,7 @@ class Connection
         }
         while (! $this->commandQueue->isEmpty()) {
             $cmd = $this->commandQueue->dequeue();
-            $cmd->promise->reject(
-                new ConnectionException('Connection closed before execution', 0, $e)
-            );
+            $cmd->promise->reject(new ConnectionException('Connection closed before execution', 0, $e));
         }
         if ($this->socket !== null) {
             $this->socket->close();
@@ -656,16 +743,12 @@ class Connection
         if ($this->isClosingError || $this->isUserClosing) {
             return;
         }
-
         $this->state = ConnectionState::CLOSED;
-
         $exception = new ConnectionException('Connection closed unexpectedly by the server');
-
         if ($this->connectPromise !== null) {
             $this->connectPromise->reject($exception);
             $this->connectPromise = null;
         }
-
         if ($this->currentCommand !== null) {
             $this->currentCommand->promise->reject($exception);
         }
@@ -686,12 +769,8 @@ class Connection
         if ($code === 2006) {
             return true;
         }
-
-        $timeoutKeywords = ['timeout', 'timed out', 'connection timeout', 'read timeout'];
-        $lowerMessage = strtolower($message);
-
-        foreach ($timeoutKeywords as $keyword) {
-            if (stripos($lowerMessage, $keyword) !== false) {
+        foreach (['timeout', 'timed out', 'connection timeout', 'read timeout'] as $keyword) {
+            if (stripos($message, $keyword) !== false) {
                 return true;
             }
         }

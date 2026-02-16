@@ -2,13 +2,15 @@
 
 declare(strict_types=1);
 
+use function Hibla\await;
+
 use Hibla\Mysql\Exceptions\PoolException;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Manager\PoolManager;
-use Hibla\Socket\Connector;
 
-use function Hibla\await;
 use function Hibla\sleep;
+
+use Hibla\Socket\Connector;
 
 describe('PoolManager', function (): void {
     describe('Construction and Validation', function (): void {
@@ -21,13 +23,14 @@ describe('PoolManager', function (): void {
                 ->and($stats['active_connections'])->toBe(0)
                 ->and($stats['pooled_connections'])->toBe(0)
                 ->and($stats['waiting_requests'])->toBe(0)
-                ->and($stats['config_validated'])->toBeTrue();
+                ->and($stats['config_validated'])->toBeTrue()
+            ;
 
             $pool->close();
         });
 
         it('accepts a ConnectionParams instance directly', function (): void {
-            $pool  = new PoolManager(testConnectionParams(), 3);
+            $pool = new PoolManager(testConnectionParams(), 3);
             $stats = $pool->getStats();
 
             expect($stats['max_size'])->toBe(3);
@@ -37,8 +40,8 @@ describe('PoolManager', function (): void {
 
         it('accepts an array config', function (): void {
             $pool = new PoolManager([
-                'host'     => $_ENV['MYSQL_HOST']     ?? '127.0.0.1',
-                'port'     => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+                'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+                'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
                 'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
                 'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
                 'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
@@ -50,8 +53,8 @@ describe('PoolManager', function (): void {
         });
 
         it('accepts a URI string config', function (): void {
-            $host     = $_ENV['MYSQL_HOST']     ?? '127.0.0.1';
-            $port     = $_ENV['MYSQL_PORT']     ?? '3306';
+            $host = $_ENV['MYSQL_HOST'] ?? '127.0.0.1';
+            $port = $_ENV['MYSQL_PORT'] ?? '3306';
             $database = $_ENV['MYSQL_DATABASE'] ?? 'test';
             $username = $_ENV['MYSQL_USERNAME'] ?? 'test_user';
             $password = $_ENV['MYSQL_PASSWORD'] ?? 'test_password';
@@ -67,41 +70,47 @@ describe('PoolManager', function (): void {
         });
 
         it('throws InvalidArgumentException when maxSize is zero', function (): void {
-            expect(fn() => makePool(0))
-                ->toThrow(\InvalidArgumentException::class, 'Pool max size must be greater than 0');
+            expect(fn () => makePool(0))
+                ->toThrow(InvalidArgumentException::class, 'Pool max size must be greater than 0')
+            ;
         });
 
         it('throws InvalidArgumentException when maxSize is negative', function (): void {
-            expect(fn() => makePool(-1))
-                ->toThrow(\InvalidArgumentException::class, 'Pool max size must be greater than 0');
+            expect(fn () => makePool(-1))
+                ->toThrow(InvalidArgumentException::class, 'Pool max size must be greater than 0')
+            ;
         });
 
         it('throws InvalidArgumentException when idleTimeout is zero', function (): void {
-            expect(fn() => new PoolManager(testConnectionParams(), 5, 0))
-                ->toThrow(\InvalidArgumentException::class, 'Idle timeout must be greater than 0');
+            expect(fn () => new PoolManager(testConnectionParams(), 5, 0))
+                ->toThrow(InvalidArgumentException::class, 'Idle timeout must be greater than 0')
+            ;
         });
 
         it('throws InvalidArgumentException when idleTimeout is negative', function (): void {
-            expect(fn() => new PoolManager(testConnectionParams(), 5, -1))
-                ->toThrow(\InvalidArgumentException::class, 'Idle timeout must be greater than 0');
+            expect(fn () => new PoolManager(testConnectionParams(), 5, -1))
+                ->toThrow(InvalidArgumentException::class, 'Idle timeout must be greater than 0')
+            ;
         });
 
         it('throws InvalidArgumentException when maxLifetime is zero', function (): void {
-            expect(fn() => new PoolManager(testConnectionParams(), 5, 300, 0))
-                ->toThrow(\InvalidArgumentException::class, 'Max lifetime must be greater than 0');
+            expect(fn () => new PoolManager(testConnectionParams(), 5, 300, 0))
+                ->toThrow(InvalidArgumentException::class, 'Max lifetime must be greater than 0')
+            ;
         });
 
         it('throws InvalidArgumentException when maxLifetime is negative', function (): void {
-            expect(fn() => new PoolManager(testConnectionParams(), 5, 300, -1))
-                ->toThrow(\InvalidArgumentException::class, 'Max lifetime must be greater than 0');
+            expect(fn () => new PoolManager(testConnectionParams(), 5, 300, -1))
+                ->toThrow(InvalidArgumentException::class, 'Max lifetime must be greater than 0')
+            ;
         });
 
         it('accepts a custom connector instance', function (): void {
             $connector = new Connector([
-                'tcp'            => true,
-                'tls'            => false,
-                'unix'           => false,
-                'dns'            => true,
+                'tcp' => true,
+                'tls' => false,
+                'unix' => false,
+                'dns' => true,
                 'happy_eyeballs' => false,
             ]);
 
@@ -109,7 +118,8 @@ describe('PoolManager', function (): void {
             $conn = await($pool->get());
 
             expect($conn)->toBeInstanceOf(Connection::class)
-                ->and($conn->isReady())->toBeTrue();
+                ->and($conn->isReady())->toBeTrue()
+            ;
 
             $pool->release($conn);
             $pool->close();
@@ -123,7 +133,8 @@ describe('PoolManager', function (): void {
             $conn = await($pool->get());
 
             expect($conn)->toBeInstanceOf(Connection::class)
-                ->and($conn->isReady())->toBeTrue();
+                ->and($conn->isReady())->toBeTrue()
+            ;
 
             $pool->release($conn);
             $pool->close();
@@ -140,7 +151,7 @@ describe('PoolManager', function (): void {
         });
 
         it('creates multiple connections up to maxSize', function (): void {
-            $pool  = makePool(3);
+            $pool = makePool(3);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
             $conn3 = await($pool->get());
@@ -154,7 +165,7 @@ describe('PoolManager', function (): void {
         });
 
         it('reuses a released connection instead of creating a new one', function (): void {
-            $pool  = makePool(3);
+            $pool = makePool(3);
             $conn1 = await($pool->get());
             $pool->release($conn1);
 
@@ -165,14 +176,15 @@ describe('PoolManager', function (): void {
             $stats2 = $pool->getStats();
 
             expect($stats1['pooled_connections'])->toBe(1)
-                ->and($stats2['active_connections'])->toBe(1);
+                ->and($stats2['active_connections'])->toBe(1)
+            ;
 
             $pool->release($conn2);
             $pool->close();
         });
 
         it('queues requests when pool is at capacity', function (): void {
-            $pool  = makePool(2);
+            $pool = makePool(2);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
 
@@ -185,7 +197,8 @@ describe('PoolManager', function (): void {
             $conn3 = await($pending);
 
             expect($conn3)->toBeInstanceOf(Connection::class)
-                ->and($pool->getStats()['waiting_requests'])->toBe(0);
+                ->and($pool->getStats()['waiting_requests'])->toBe(0)
+            ;
 
             $pool->release($conn2);
             $pool->release($conn3);
@@ -193,7 +206,7 @@ describe('PoolManager', function (): void {
         });
 
         it('resolves waiters in FIFO order', function (): void {
-            $pool  = makePool(1);
+            $pool = makePool(1);
             $conn1 = await($pool->get());
 
             $resolved = [];
@@ -249,13 +262,14 @@ describe('PoolManager', function (): void {
             $pool->release($conn);
 
             expect($pool->getStats()['pooled_connections'])->toBe(0)
-                ->and($pool->getStats()['active_connections'])->toBe(0);
+                ->and($pool->getStats()['active_connections'])->toBe(0)
+            ;
 
             $pool->close();
         });
 
         it('passes connection directly to waiter on release', function (): void {
-            $pool  = makePool(1);
+            $pool = makePool(1);
             $conn1 = await($pool->get());
 
             $pending = $pool->get();
@@ -268,7 +282,8 @@ describe('PoolManager', function (): void {
 
             expect($conn2)->toBeInstanceOf(Connection::class)
                 ->and($pool->getStats()['waiting_requests'])->toBe(0)
-                ->and($pool->getStats()['pooled_connections'])->toBe(0);
+                ->and($pool->getStats()['pooled_connections'])->toBe(0)
+            ;
 
             $pool->release($conn2);
             $pool->close();
@@ -292,7 +307,7 @@ describe('PoolManager', function (): void {
     describe('Statistics', function (): void {
 
         it('returns correct stats with no connections', function (): void {
-            $pool  = makePool(10);
+            $pool = makePool(10);
             $stats = $pool->getStats();
 
             expect($stats['active_connections'])->toBe(0)
@@ -300,13 +315,14 @@ describe('PoolManager', function (): void {
                 ->and($stats['waiting_requests'])->toBe(0)
                 ->and($stats['max_size'])->toBe(10)
                 ->and($stats['config_validated'])->toBeTrue()
-                ->and($stats['tracked_connections'])->toBe(0);
+                ->and($stats['tracked_connections'])->toBe(0)
+            ;
 
             $pool->close();
         });
 
         it('tracks active connections correctly across get and release', function (): void {
-            $pool  = makePool(5);
+            $pool = makePool(5);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
 
@@ -315,7 +331,8 @@ describe('PoolManager', function (): void {
             $pool->release($conn1);
 
             expect($pool->getStats()['active_connections'])->toBe(2)
-                ->and($pool->getStats()['pooled_connections'])->toBe(1);
+                ->and($pool->getStats()['pooled_connections'])->toBe(1)
+            ;
 
             $pool->release($conn2);
 
@@ -325,8 +342,8 @@ describe('PoolManager', function (): void {
         });
 
         it('tracks connection creation timestamps', function (): void {
-            $pool  = makePool();
-            $conn  = await($pool->get());
+            $pool = makePool();
+            $conn = await($pool->get());
             $stats = $pool->getStats();
 
             expect($stats['tracked_connections'])->toBe(1);
@@ -350,24 +367,26 @@ describe('PoolManager', function (): void {
             expect($stats['total_checked'])->toBe(1)
                 ->and($stats['healthy'])->toBeGreaterThanOrEqual(0)
                 ->and($stats['unhealthy'])->toBe(0)
-                ->and($stats['total_checked'])->toBe($stats['healthy'] + $stats['unhealthy']);
+                ->and($stats['total_checked'])->toBe($stats['healthy'] + $stats['unhealthy'])
+            ;
 
             $pool->close();
         });
 
         it('returns zero stats when pool is empty', function (): void {
-            $pool  = makePool();
+            $pool = makePool();
             $stats = await($pool->healthCheck());
 
             expect($stats['total_checked'])->toBe(0)
                 ->and($stats['healthy'])->toBe(0)
-                ->and($stats['unhealthy'])->toBe(0);
+                ->and($stats['unhealthy'])->toBe(0)
+            ;
 
             $pool->close();
         });
 
         it('returns healthy stats for multiple pooled connections', function (): void {
-            $pool  = makePool(3);
+            $pool = makePool(3);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
             $conn3 = await($pool->get());
@@ -382,7 +401,8 @@ describe('PoolManager', function (): void {
 
             expect($stats['total_checked'])->toBe(3)
                 ->and($stats['healthy'] + $stats['unhealthy'])->toBe($stats['total_checked'])
-                ->and($stats['unhealthy'])->toBe(0);
+                ->and($stats['unhealthy'])->toBe(0)
+            ;
 
             $pool->close();
         });
@@ -406,8 +426,8 @@ describe('PoolManager', function (): void {
 
             await($pool->healthCheck());
 
-            $conn2   = await($pool->get());
-            $result  = await($conn2->query('SELECT 1 AS val'));
+            $conn2 = await($pool->get());
+            $result = await($conn2->query('SELECT 1 AS val'));
 
             expect($result->fetchOne()['val'])->toBe('1');
 
@@ -419,7 +439,7 @@ describe('PoolManager', function (): void {
     describe('Close', function (): void {
 
         it('closes all pooled connections on close()', function (): void {
-            $pool  = makePool();
+            $pool = makePool();
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
 
@@ -429,7 +449,8 @@ describe('PoolManager', function (): void {
             $pool->close();
 
             expect($conn1->isClosed())->toBeTrue()
-                ->and($conn2->isClosed())->toBeTrue();
+                ->and($conn2->isClosed())->toBeTrue()
+            ;
         });
 
         it('resets stats to zero after close()', function (): void {
@@ -444,16 +465,17 @@ describe('PoolManager', function (): void {
             expect($stats['active_connections'])->toBe(0)
                 ->and($stats['pooled_connections'])->toBe(0)
                 ->and($stats['waiting_requests'])->toBe(0)
-                ->and($stats['tracked_connections'])->toBe(0);
+                ->and($stats['tracked_connections'])->toBe(0)
+            ;
         });
 
         it('rejects pending waiters with PoolException on close()', function (): void {
-            $pool  = makePool(1);
-            $conn  = await($pool->get());
+            $pool = makePool(1);
+            $conn = await($pool->get());
             $error = null;
 
             $pending = $pool->get();
-            $pending->then(null, function (\Throwable $e) use (&$error): void {
+            $pending->then(null, function (Throwable $e) use (&$error): void {
                 $error = $e;
             });
 
@@ -466,13 +488,13 @@ describe('PoolManager', function (): void {
 
             expect($error)->toBeNull();
 
-            $pool2  = makePool(1);
-            $conn2  = await($pool2->get());
+            $pool2 = makePool(1);
+            $conn2 = await($pool2->get());
             $error2 = null;
 
             $pending2 = $pool2->get();
 
-            $chained = $pending2->then(null, function (\Throwable $e) use (&$error2): void {
+            $chained = $pending2->then(null, function (Throwable $e) use (&$error2): void {
                 $error2 = $e;
             });
 
@@ -482,7 +504,7 @@ describe('PoolManager', function (): void {
 
             try {
                 await($chained);
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected rejection
             }
 
@@ -507,20 +529,21 @@ describe('PoolManager', function (): void {
             $pool = makePool(3);
 
             for ($i = 0; $i < 10; $i++) {
-                $conn   = await($pool->get());
+                $conn = await($pool->get());
                 $result = await($conn->query('SELECT 1 AS val'));
                 expect($result->fetchOne()['val'])->toBe('1');
                 $pool->release($conn);
             }
 
             expect($pool->getStats()['active_connections'])->toBe(1)
-                ->and($pool->getStats()['pooled_connections'])->toBe(1);
+                ->and($pool->getStats()['pooled_connections'])->toBe(1)
+            ;
 
             $pool->close();
         });
 
         it('does not exceed maxSize under concurrent requests', function (): void {
-            $pool        = makePool(3);
+            $pool = makePool(3);
             $connections = [];
 
             for ($i = 0; $i < 3; $i++) {
@@ -532,13 +555,15 @@ describe('PoolManager', function (): void {
             // A 4th request should be queued not create a new connection
             $pending = $pool->get();
             expect($pool->getStats()['waiting_requests'])->toBe(1)
-                ->and($pool->getStats()['active_connections'])->toBe(3);
+                ->and($pool->getStats()['active_connections'])->toBe(3)
+            ;
 
             $pool->release($connections[0]);
 
             $conn4 = await($pending);
             expect($pool->getStats()['active_connections'])->toBe(3)
-                ->and($pool->getStats()['waiting_requests'])->toBe(0);
+                ->and($pool->getStats()['waiting_requests'])->toBe(0)
+            ;
 
             $pool->release($conn4);
             $pool->release($connections[1]);
@@ -547,7 +572,7 @@ describe('PoolManager', function (): void {
         });
 
         it('can execute queries across multiple pooled connections', function (): void {
-            $pool  = makePool(3);
+            $pool = makePool(3);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
             $conn3 = await($pool->get());
@@ -558,7 +583,8 @@ describe('PoolManager', function (): void {
 
             expect($result1->fetchOne()['val'])->toBe('1')
                 ->and($result2->fetchOne()['val'])->toBe('2')
-                ->and($result3->fetchOne()['val'])->toBe('3');
+                ->and($result3->fetchOne()['val'])->toBe('3')
+            ;
 
             $pool->release($conn1);
             $pool->release($conn2);
@@ -611,7 +637,8 @@ describe('PoolManager', function (): void {
             $pool->release($conn);
 
             expect($pool->getStats()['pooled_connections'])->toBe(0)
-                ->and($pool->getStats()['active_connections'])->toBe(0);
+                ->and($pool->getStats()['active_connections'])->toBe(0)
+            ;
 
             $pool->close();
         });
@@ -626,7 +653,8 @@ describe('PoolManager', function (): void {
             $newConn = await($pool->get());
 
             expect($newConn->isReady())->toBeTrue()
-                ->and($newConn->isClosed())->toBeFalse();
+                ->and($newConn->isClosed())->toBeFalse()
+            ;
 
             $pool->release($newConn);
             $pool->close();
@@ -648,7 +676,7 @@ describe('PoolManager', function (): void {
         });
 
         it('automatically closes multiple pooled connections when pool is unset', function (): void {
-            $pool  = makePool(3);
+            $pool = makePool(3);
             $conn1 = await($pool->get());
             $conn2 = await($pool->get());
             $conn3 = await($pool->get());
@@ -663,16 +691,17 @@ describe('PoolManager', function (): void {
 
             expect($conn1->isClosed())->toBeTrue()
                 ->and($conn2->isClosed())->toBeTrue()
-                ->and($conn3->isClosed())->toBeTrue();
+                ->and($conn3->isClosed())->toBeTrue()
+            ;
         });
 
         it('rejects pending waiters when pool is garbage collected', function (): void {
-            $pool  = makePool(1);
-            $conn  = await($pool->get());
+            $pool = makePool(1);
+            $conn = await($pool->get());
             $error = null;
 
             $pending = $pool->get();
-            $chained = $pending->then(null, function (\Throwable $e) use (&$error): void {
+            $chained = $pending->then(null, function (Throwable $e) use (&$error): void {
                 $error = $e;
             });
 
@@ -682,7 +711,7 @@ describe('PoolManager', function (): void {
 
             try {
                 await($chained);
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 

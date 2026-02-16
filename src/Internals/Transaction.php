@@ -39,7 +39,8 @@ class Transaction implements TransactionInterface
     public function __construct(
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {}
+    ) {
+    }
 
     /**
      * {@inheritdoc}
@@ -60,13 +61,15 @@ class Transaction implements TransactionInterface
         return $this->connection->prepare($sql)
             ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                 $stmtRef = $stmt;
+
                 return $stmt->execute($params);
             })
             ->finally(function () use (&$stmtRef): void {
                 if ($stmtRef !== null) {
                     $stmtRef->close();
                 }
-            });
+            })
+        ;
     }
 
     /**
@@ -92,9 +95,12 @@ class Transaction implements TransactionInterface
                         if ($stream instanceof RowStream) {
                             $stream->waitForCommand()->finally($stmt->close(...));
                         }
+
                         return $stream;
-                    });
-            });
+                    })
+                ;
+            })
+        ;
     }
 
     /**
@@ -103,7 +109,8 @@ class Transaction implements TransactionInterface
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->getAffectedRows());
+            ->then(fn (ResultInterface $result) => $result->getAffectedRows())
+        ;
     }
 
     /**
@@ -112,7 +119,8 @@ class Transaction implements TransactionInterface
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->getLastInsertId());
+            ->then(fn (ResultInterface $result) => $result->getLastInsertId())
+        ;
     }
 
     /**
@@ -121,7 +129,8 @@ class Transaction implements TransactionInterface
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->query($sql, $params)
-            ->then(fn(ResultInterface $result) => $result->fetchOne());
+            ->then(fn (ResultInterface $result) => $result->fetchOne())
+        ;
     }
 
     /**
@@ -135,8 +144,10 @@ class Transaction implements TransactionInterface
                 if ($row === null) {
                     return null;
                 }
+
                 return $row[$column] ?? null;
-            });
+            })
+        ;
     }
 
     /**
@@ -165,6 +176,7 @@ class Transaction implements TransactionInterface
     public function prepare(string $sql): PromiseInterface
     {
         $this->ensureActive();
+
         return $this->connection->prepare($sql);
     }
 
@@ -194,7 +206,8 @@ class Transaction implements TransactionInterface
             )
             ->finally(function (): void {
                 $this->releaseConnection();
-            });
+            })
+        ;
     }
 
     /**
@@ -223,7 +236,8 @@ class Transaction implements TransactionInterface
             )
             ->finally(function (): void {
                 $this->releaseConnection();
-            });
+            })
+        ;
     }
 
     /**
@@ -238,7 +252,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
@@ -246,7 +261,8 @@ class Transaction implements TransactionInterface
                         $e
                     );
                 }
-            );
+            )
+        ;
     }
 
     /**
@@ -261,7 +277,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): void {
                     throw new TransactionException(
                         "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
@@ -269,7 +286,8 @@ class Transaction implements TransactionInterface
                         $e
                     );
                 }
-            );
+            )
+        ;
     }
 
     /**
@@ -284,7 +302,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): void {
                     throw new TransactionException(
                         "Failed to release savepoint '{$identifier}': " . $e->getMessage(),
@@ -292,7 +311,8 @@ class Transaction implements TransactionInterface
                         $e
                     );
                 }
-            );
+            )
+        ;
     }
 
     /**

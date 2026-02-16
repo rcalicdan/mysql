@@ -16,7 +16,7 @@ beforeAll(function (): void {
 
     $batchSize = 2000;
     $totalRows = 100000;
-    $batches   = (int) ceil($totalRows / $batchSize);
+    $batches = (int) ceil($totalRows / $batchSize);
 
     for ($i = 0; $i < $batches; $i++) {
         $values = [];
@@ -41,7 +41,7 @@ describe('Stream Memory', function (): void {
     describe('Text Protocol', function (): void {
 
         it('streams 100k rows without significant memory growth', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $totalRows = 100000;
             $threshold = 5 * 1024 * 1024;
 
@@ -50,7 +50,7 @@ describe('Stream Memory', function (): void {
 
             $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
 
-            $count      = 0;
+            $count = 0;
             $peakMemory = 0;
 
             foreach ($stream as $row) {
@@ -68,13 +68,14 @@ describe('Stream Memory', function (): void {
             $memoryGrowth = $peakMemory - $startMemory;
 
             expect($count)->toBe($totalRows)
-                ->and($memoryGrowth)->toBeLessThan($threshold);
+                ->and($memoryGrowth)->toBeLessThan($threshold)
+            ;
 
             $conn->close();
         });
 
         it('stream stats report correct row count and a valid duration', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $totalRows = 100000;
 
             $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
@@ -86,13 +87,14 @@ describe('Stream Memory', function (): void {
             $stats = $stream->getStats();
 
             expect($stats->rowCount)->toBe($totalRows)
-                ->and($stats->duration)->toBeGreaterThan(0.0);
+                ->and($stats->duration)->toBeGreaterThan(0.0)
+            ;
 
             $conn->close();
         });
 
         it('streams rows with correct column structure', function (): void {
-            $conn   = makeConnection();
+            $conn = makeConnection();
             $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test LIMIT 10'));
 
             $rows = [];
@@ -107,14 +109,15 @@ describe('Stream Memory', function (): void {
                     ->and($row)->toHaveKey('uuid')
                     ->and($row)->toHaveKey('description')
                     ->and($row)->toHaveKey('created_at')
-                    ->and($row['description'])->toBe(str_repeat('X', 100));
+                    ->and($row['description'])->toBe(str_repeat('X', 100))
+                ;
             }
 
             $conn->close();
         });
 
         it('peak PHP memory stays under 20MB while streaming 100k rows', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $threshold = 20 * 1024 * 1024;
 
             gc_collect_cycles();
@@ -135,21 +138,20 @@ describe('Stream Memory', function (): void {
         });
     });
 
-
     describe('Binary Protocol', function (): void {
 
         it('streams 100k rows via prepared statement without significant memory growth', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $totalRows = 100000;
             $threshold = 5 * 1024 * 1024;
 
             gc_collect_cycles();
             $startMemory = memory_get_usage();
 
-            $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+            $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
             $stream = await($stmt->executeStream([]));
 
-            $count      = 0;
+            $count = 0;
             $peakMemory = 0;
 
             foreach ($stream as $row) {
@@ -167,17 +169,18 @@ describe('Stream Memory', function (): void {
             $memoryGrowth = $peakMemory - $startMemory;
 
             expect($count)->toBe($totalRows)
-                ->and($memoryGrowth)->toBeLessThan($threshold);
+                ->and($memoryGrowth)->toBeLessThan($threshold)
+            ;
 
             await($stmt->close());
             $conn->close();
         });
 
         it('binary stream stats report correct row count and a valid duration', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $totalRows = 100000;
 
-            $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+            $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
             $stream = await($stmt->executeStream([]));
 
             foreach ($stream as $_) {
@@ -187,7 +190,8 @@ describe('Stream Memory', function (): void {
             $stats = $stream->getStats();
 
             expect($stats->rowCount)->toBe($totalRows)
-                ->and($stats->duration)->toBeGreaterThan(0.0);
+                ->and($stats->duration)->toBeGreaterThan(0.0)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -196,7 +200,7 @@ describe('Stream Memory', function (): void {
         it('binary stream rows have correct column structure', function (): void {
             $conn = makeConnection();
 
-            $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
+            $stmt = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
             $stream = await($stmt->executeStream([]));
 
             $rows = [];
@@ -210,7 +214,8 @@ describe('Stream Memory', function (): void {
                 expect($row)->toHaveKey('id')
                     ->and($row)->toHaveKey('uuid')
                     ->and($row)->toHaveKey('description')
-                    ->and($row)->toHaveKey('created_at');
+                    ->and($row)->toHaveKey('created_at')
+                ;
             }
 
             await($stmt->close());
@@ -218,13 +223,13 @@ describe('Stream Memory', function (): void {
         });
 
         it('binary stream memory stays stable with small buffer size', function (): void {
-            $conn      = makeConnection();
+            $conn = makeConnection();
             $threshold = 5 * 1024 * 1024;
 
             gc_collect_cycles();
             $startMemory = memory_get_usage();
 
-            $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+            $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
             $stream = await($stmt->executeStream([], bufferSize: 10));
 
             $peakMemory = 0;
@@ -246,7 +251,7 @@ describe('Stream Memory', function (): void {
         describe('Text Protocol', function (): void {
 
             it('stats have correct row count and column count', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
 
                 foreach ($stream as $_) {
@@ -256,13 +261,14 @@ describe('Stream Memory', function (): void {
                 $stats = $stream->getStats();
 
                 expect($stats->rowCount)->toBe(100000)
-                    ->and($stats->columnCount)->toBe(4); // id, uuid, description, created_at
+                    ->and($stats->columnCount)->toBe(4) // id, uuid, description, created_at
+                ;
 
                 $conn->close();
             });
 
             it('stats have a positive duration after streaming', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
 
                 foreach ($stream as $_) {
@@ -277,7 +283,7 @@ describe('Stream Memory', function (): void {
             });
 
             it('stats warningCount defaults to zero', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test LIMIT 10'));
 
                 foreach ($stream as $_) {
@@ -292,7 +298,7 @@ describe('Stream Memory', function (): void {
             });
 
             it('hasRows returns true when rows were streamed', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test LIMIT 10'));
 
                 foreach ($stream as $_) {
@@ -305,7 +311,7 @@ describe('Stream Memory', function (): void {
             });
 
             it('hasRows returns false on empty result set', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery(
                     'SELECT * FROM stream_memory_test WHERE id = -1'
                 ));
@@ -320,7 +326,7 @@ describe('Stream Memory', function (): void {
             });
 
             it('getRowsPerSecond returns a positive value after streaming', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
 
                 foreach ($stream as $_) {
@@ -335,7 +341,7 @@ describe('Stream Memory', function (): void {
             });
 
             it('getRowsPerSecond returns zero when row count is zero', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery(
                     'SELECT * FROM stream_memory_test WHERE id = -1'
                 ));
@@ -350,14 +356,14 @@ describe('Stream Memory', function (): void {
             });
 
             it('rows per second is consistent with row count and duration', function (): void {
-                $conn   = makeConnection();
+                $conn = makeConnection();
                 $stream = await($conn->streamQuery('SELECT * FROM stream_memory_test'));
 
                 foreach ($stream as $_) {
                     // consume
                 }
 
-                $stats    = $stream->getStats();
+                $stats = $stream->getStats();
                 $expected = $stats->rowCount / $stats->duration;
 
                 expect($stats->getRowsPerSecond())->toBe($expected);
@@ -369,8 +375,8 @@ describe('Stream Memory', function (): void {
         describe('Binary Protocol', function (): void {
 
             it('binary stats have correct row count and column count', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
@@ -380,15 +386,16 @@ describe('Stream Memory', function (): void {
                 $stats = $stream->getStats();
 
                 expect($stats->rowCount)->toBe(100000)
-                    ->and($stats->columnCount)->toBe(4);
+                    ->and($stats->columnCount)->toBe(4)
+                ;
 
                 await($stmt->close());
                 $conn->close();
             });
 
             it('binary stats have a positive duration after streaming', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
@@ -402,8 +409,8 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary stats warningCount defaults to zero', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
@@ -417,8 +424,8 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary hasRows returns true when rows were streamed', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test LIMIT 10'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
@@ -432,8 +439,8 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary hasRows returns false on empty result set', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare(
+                $conn = makeConnection();
+                $stmt = await($conn->prepare(
                     'SELECT * FROM stream_memory_test WHERE id = -1'
                 ));
                 $stream = await($stmt->executeStream([]));
@@ -449,8 +456,8 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary getRowsPerSecond returns a positive value after streaming', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
@@ -464,8 +471,8 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary getRowsPerSecond returns zero when row count is zero', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare(
+                $conn = makeConnection();
+                $stmt = await($conn->prepare(
                     'SELECT * FROM stream_memory_test WHERE id = -1'
                 ));
                 $stream = await($stmt->executeStream([]));
@@ -481,15 +488,15 @@ describe('Stream Memory', function (): void {
             });
 
             it('binary rows per second is consistent with row count and duration', function (): void {
-                $conn   = makeConnection();
-                $stmt   = await($conn->prepare('SELECT * FROM stream_memory_test'));
+                $conn = makeConnection();
+                $stmt = await($conn->prepare('SELECT * FROM stream_memory_test'));
                 $stream = await($stmt->executeStream([]));
 
                 foreach ($stream as $_) {
                     // consume
                 }
 
-                $stats    = $stream->getStats();
+                $stats = $stream->getStats();
                 $expected = $stats->rowCount / $stats->duration;
 
                 expect($stats->getRowsPerSecond())->toBe($expected);

@@ -2,12 +2,13 @@
 
 declare(strict_types=1);
 
+use function Hibla\await;
+
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
 use Hibla\Mysql\Internals\ManagedPreparedStatement;
-use Hibla\Mysql\MysqlClient;
 
-use function Hibla\await;
+use Hibla\Mysql\MysqlClient;
 
 beforeAll(function (): void {
     $client = makeClient();
@@ -44,8 +45,8 @@ describe('MysqlClient', function (): void {
 
         it('creates a client with an array config', function (): void {
             $client = new MysqlClient([
-                'host'     => $_ENV['MYSQL_HOST']     ?? '127.0.0.1',
-                'port'     => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+                'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+                'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
                 'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
                 'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
                 'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
@@ -57,8 +58,8 @@ describe('MysqlClient', function (): void {
         });
 
         it('creates a client with a URI string config', function (): void {
-            $host     = $_ENV['MYSQL_HOST']     ?? '127.0.0.1';
-            $port     = $_ENV['MYSQL_PORT']     ?? '3306';
+            $host = $_ENV['MYSQL_HOST'] ?? '127.0.0.1';
+            $port = $_ENV['MYSQL_PORT'] ?? '3306';
             $database = $_ENV['MYSQL_DATABASE'] ?? 'test';
             $username = $_ENV['MYSQL_USERNAME'] ?? 'test_user';
             $password = $_ENV['MYSQL_PASSWORD'] ?? 'test_password';
@@ -73,23 +74,26 @@ describe('MysqlClient', function (): void {
         });
 
         it('throws ConfigurationException for invalid maxConnections', function (): void {
-            expect(fn() => makeClient(maxConnections: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(maxConnections: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('throws ConfigurationException for invalid idleTimeout', function (): void {
-            expect(fn() => makeClient(idleTimeout: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(idleTimeout: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('throws ConfigurationException for invalid maxLifetime', function (): void {
-            expect(fn() => makeClient(maxLifetime: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(maxLifetime: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('creates a client with statement cache disabled', function (): void {
             $client = makeClient(enableStatementCache: false);
-            $stats  = $client->getStats();
+            $stats = $client->getStats();
 
             expect($stats['statement_cache_enabled'])->toBeFalse();
 
@@ -101,21 +105,22 @@ describe('MysqlClient', function (): void {
 
         it('returns correct default stats before any query', function (): void {
             $client = makeClient(maxConnections: 3, statementCacheSize: 128);
-            $stats  = $client->getStats();
+            $stats = $client->getStats();
 
             expect($stats['max_size'])->toBe(3)
                 ->and($stats['active_connections'])->toBe(0)
                 ->and($stats['pooled_connections'])->toBe(0)
                 ->and($stats['waiting_requests'])->toBe(0)
                 ->and($stats['statement_cache_enabled'])->toBeTrue()
-                ->and($stats['statement_cache_size'])->toBe(128);
+                ->and($stats['statement_cache_size'])->toBe(128)
+            ;
 
             $client->close();
         });
 
         it('reflects statement cache disabled in stats', function (): void {
             $client = makeClient(enableStatementCache: false);
-            $stats  = $client->getStats();
+            $stats = $client->getStats();
 
             expect($stats['statement_cache_enabled'])->toBeFalse();
 
@@ -133,18 +138,20 @@ describe('MysqlClient', function (): void {
             $stats = await($client->healthCheck());
 
             expect($stats['total_checked'])->toBeGreaterThanOrEqual(1)
-                ->and($stats['unhealthy'])->toBe(0);
+                ->and($stats['unhealthy'])->toBe(0)
+            ;
 
             $client->close();
         });
 
         it('returns zero stats when no connections have been made', function (): void {
             $client = makeClient();
-            $stats  = await($client->healthCheck());
+            $stats = await($client->healthCheck());
 
             expect($stats['total_checked'])->toBe(0)
                 ->and($stats['healthy'])->toBe(0)
-                ->and($stats['unhealthy'])->toBe(0);
+                ->and($stats['unhealthy'])->toBe(0)
+            ;
 
             $client->close();
         });
@@ -197,7 +204,7 @@ describe('MysqlClient', function (): void {
 
             try {
                 await($client->query('SELECT * FROM non_existent_table_xyz'));
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 
@@ -211,14 +218,15 @@ describe('MysqlClient', function (): void {
         });
 
         it('executes multiple sequential queries correctly', function (): void {
-            $client  = makeClient();
+            $client = makeClient();
             $result1 = await($client->query('SELECT 1 AS val'));
             $result2 = await($client->query('SELECT 2 AS val'));
             $result3 = await($client->query('SELECT 3 AS val'));
 
             expect($result1->fetchOne()['val'])->toBe('1')
                 ->and($result2->fetchOne()['val'])->toBe('2')
-                ->and($result3->fetchOne()['val'])->toBe('3');
+                ->and($result3->fetchOne()['val'])->toBe('3')
+            ;
 
             $client->close();
         });
@@ -227,7 +235,7 @@ describe('MysqlClient', function (): void {
     describe('Execute', function (): void {
 
         it('returns affected rows count after INSERT', function (): void {
-            $client       = makeClient();
+            $client = makeClient();
             $affectedRows = await($client->execute(
                 "INSERT INTO mysql_client_test (name) VALUES ('execute_test')"
             ));
@@ -242,7 +250,7 @@ describe('MysqlClient', function (): void {
         });
 
         it('returns zero affected rows when UPDATE matches no rows', function (): void {
-            $client       = makeClient();
+            $client = makeClient();
             $affectedRows = await($client->execute(
                 "UPDATE mysql_client_test SET name = 'x' WHERE id = -9999"
             ));
@@ -253,16 +261,16 @@ describe('MysqlClient', function (): void {
         });
 
         it('returns affected rows with params', function (): void {
-            $client       = makeClient();
+            $client = makeClient();
             $affectedRows = await($client->execute(
-                "INSERT INTO mysql_client_test (name) VALUES (?)",
+                'INSERT INTO mysql_client_test (name) VALUES (?)',
                 ['execute_param_test']
             ));
 
             expect($affectedRows)->toBe(1);
 
             await($client->execute(
-                "DELETE FROM mysql_client_test WHERE name = ?",
+                'DELETE FROM mysql_client_test WHERE name = ?',
                 ['execute_param_test']
             ));
 
@@ -273,7 +281,7 @@ describe('MysqlClient', function (): void {
     describe('ExecuteGetId', function (): void {
 
         it('returns the last insert id after INSERT', function (): void {
-            $client   = makeClient();
+            $client = makeClient();
             $insertId = await($client->executeGetId(
                 "INSERT INTO mysql_client_test (name) VALUES ('id_test')"
             ));
@@ -281,7 +289,7 @@ describe('MysqlClient', function (): void {
             expect($insertId)->toBeGreaterThan(0);
 
             await($client->execute(
-                "DELETE FROM mysql_client_test WHERE id = ?",
+                'DELETE FROM mysql_client_test WHERE id = ?',
                 [$insertId]
             ));
 
@@ -289,16 +297,16 @@ describe('MysqlClient', function (): void {
         });
 
         it('returns the last insert id with params', function (): void {
-            $client   = makeClient();
+            $client = makeClient();
             $insertId = await($client->executeGetId(
-                "INSERT INTO mysql_client_test (name) VALUES (?)",
+                'INSERT INTO mysql_client_test (name) VALUES (?)',
                 ['id_param_test']
             ));
 
             expect($insertId)->toBeGreaterThan(0);
 
             await($client->execute(
-                "DELETE FROM mysql_client_test WHERE id = ?",
+                'DELETE FROM mysql_client_test WHERE id = ?',
                 [$insertId]
             ));
 
@@ -310,17 +318,18 @@ describe('MysqlClient', function (): void {
 
         it('returns the first row of a result set', function (): void {
             $client = makeClient();
-            $row    = await($client->fetchOne('SELECT 1 AS val, 2 AS other'));
+            $row = await($client->fetchOne('SELECT 1 AS val, 2 AS other'));
 
             expect($row['val'])->toBe('1')
-                ->and($row['other'])->toBe('2');
+                ->and($row['other'])->toBe('2')
+            ;
 
             $client->close();
         });
 
         it('returns null when no rows match', function (): void {
             $client = makeClient();
-            $row    = await($client->fetchOne('SELECT 1 WHERE 1 = 0'));
+            $row = await($client->fetchOne('SELECT 1 WHERE 1 = 0'));
 
             expect($row)->toBeNull();
 
@@ -329,8 +338,8 @@ describe('MysqlClient', function (): void {
 
         it('returns only the first row when multiple rows exist', function (): void {
             $client = makeClient();
-            $row    = await($client->fetchOne(
-                "SELECT 1 AS val UNION SELECT 2 AS val UNION SELECT 3 AS val"
+            $row = await($client->fetchOne(
+                'SELECT 1 AS val UNION SELECT 2 AS val UNION SELECT 3 AS val'
             ));
 
             expect($row['val'])->toBe('1');
@@ -340,7 +349,7 @@ describe('MysqlClient', function (): void {
 
         it('returns first row with params', function (): void {
             $client = makeClient();
-            $row    = await($client->fetchOne('SELECT ? AS val', [123]));
+            $row = await($client->fetchOne('SELECT ? AS val', [123]));
 
             expect($row['val'])->toBe(123);
 
@@ -352,7 +361,7 @@ describe('MysqlClient', function (): void {
 
         it('returns the value of a named column', function (): void {
             $client = makeClient();
-            $value  = await($client->fetchValue('SELECT 42 AS answer', 'answer'));
+            $value = await($client->fetchValue('SELECT 42 AS answer', 'answer'));
 
             expect($value)->toBe('42');
 
@@ -373,7 +382,7 @@ describe('MysqlClient', function (): void {
 
         it('returns null when no rows match', function (): void {
             $client = makeClient();
-            $value  = await($client->fetchValue('SELECT 1 WHERE 1 = 0', 0));
+            $value = await($client->fetchValue('SELECT 1 WHERE 1 = 0', 0));
 
             expect($value)->toBeNull();
 
@@ -382,7 +391,7 @@ describe('MysqlClient', function (): void {
 
         it('returns null when column key does not exist', function (): void {
             $client = makeClient();
-            $value  = await($client->fetchValue('SELECT 1 AS val', 'nonexistent'));
+            $value = await($client->fetchValue('SELECT 1 AS val', 'nonexistent'));
 
             expect($value)->toBeNull();
 
@@ -391,7 +400,7 @@ describe('MysqlClient', function (): void {
 
         it('returns a value with params', function (): void {
             $client = makeClient();
-            $value  = await($client->fetchValue('SELECT ? AS val', 'val', [99]));
+            $value = await($client->fetchValue('SELECT ? AS val', 'val', [99]));
 
             expect($value)->toBe(99);
 
@@ -411,7 +420,8 @@ describe('MysqlClient', function (): void {
             }
 
             expect($rows)->toHaveCount(3)
-                ->and($rows[0]['val'])->toBe('1');
+                ->and($rows[0]['val'])->toBe('1')
+            ;
 
             $client->close();
         });
@@ -429,7 +439,8 @@ describe('MysqlClient', function (): void {
             }
 
             expect($rows)->not->toBeEmpty()
-                ->and($rows[0])->toHaveKey('name');
+                ->and($rows[0])->toHaveKey('name')
+            ;
 
             $client->close();
         });
@@ -484,7 +495,7 @@ describe('MysqlClient', function (): void {
 
         it('returns a ManagedPreparedStatement', function (): void {
             $client = makeClient();
-            $stmt   = await($client->prepare('SELECT ? AS val'));
+            $stmt = await($client->prepare('SELECT ? AS val'));
 
             expect($stmt)->toBeInstanceOf(ManagedPreparedStatement::class);
 
@@ -494,7 +505,7 @@ describe('MysqlClient', function (): void {
 
         it('executes a prepared statement and returns the correct result', function (): void {
             $client = makeClient();
-            $stmt   = await($client->prepare('SELECT ? AS val'));
+            $stmt = await($client->prepare('SELECT ? AS val'));
             $result = await($stmt->execute([42]));
 
             expect($result->fetchOne()['val'])->toBe(42);
@@ -505,13 +516,14 @@ describe('MysqlClient', function (): void {
 
         it('reuses the same prepared statement for multiple executions', function (): void {
             $client = makeClient();
-            $stmt   = await($client->prepare('SELECT ? AS val'));
+            $stmt = await($client->prepare('SELECT ? AS val'));
 
             $result1 = await($stmt->execute([1]));
             $result2 = await($stmt->execute([2]));
 
             expect($result1->fetchOne()['val'])->toBe(1)
-                ->and($result2->fetchOne()['val'])->toBe(2);
+                ->and($result2->fetchOne()['val'])->toBe(2)
+            ;
 
             await($stmt->close());
             $client->close();
@@ -522,7 +534,7 @@ describe('MysqlClient', function (): void {
 
             try {
                 await($client->prepare('NOT VALID SQL ???'));
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // expected
             }
 
@@ -545,7 +557,8 @@ describe('MysqlClient', function (): void {
             $result2 = await($client->query('SELECT ? AS val', [2]));
 
             expect($result1->fetchOne()['val'])->toBe(1)
-                ->and($result2->fetchOne()['val'])->toBe(2);
+                ->and($result2->fetchOne()['val'])->toBe(2)
+            ;
 
             $client->close();
         });
@@ -571,7 +584,8 @@ describe('MysqlClient', function (): void {
             $result2 = await($client->query('SELECT ? AS val', [20]));
 
             expect($result1->fetchOne()['val'])->toBe(10)
-                ->and($result2->fetchOne()['val'])->toBe(20);
+                ->and($result2->fetchOne()['val'])->toBe(20)
+            ;
 
             $client->close();
         });
@@ -595,8 +609,9 @@ describe('MysqlClient', function (): void {
             $client = makeClient();
             $client->close();
 
-            expect(fn() => await($client->query('SELECT 1')))
-                ->toThrow(NotInitializedException::class);
+            expect(fn () => await($client->query('SELECT 1')))
+                ->toThrow(NotInitializedException::class)
+            ;
         });
 
         it('is safe to call close() multiple times', function (): void {
@@ -632,7 +647,7 @@ describe('MysqlClient', function (): void {
             $client = makeClient();
             $client->close();
 
-            expect(fn() => $client->getStats())
+            expect(fn () => $client->getStats())
                 ->toThrow(NotInitializedException::class);
         });
     });

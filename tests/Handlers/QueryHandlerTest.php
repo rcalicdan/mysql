@@ -179,7 +179,8 @@ describe('QueryHandler', function () {
 
         $completeCalled = false;
         $streamContext = new StreamContext(
-            onRow: function (array $row) {},
+            onRow: function (array $row) {
+            },
             onComplete: function (StreamStats $stats) use (&$completeCalled) {
                 $completeCalled = true;
                 expect($stats->rowCount)->toBeGreaterThanOrEqual(0);
@@ -229,7 +230,8 @@ describe('QueryHandler', function () {
 
         $handler->start('SELECT 1', $promise, $streamContext);
 
-        $promise->catch(function (Throwable $e) {});
+        $promise->catch(function (Throwable $e) {
+        });
 
         $headerReader = Mockery::mock(PayloadReader::class);
         $headerReader->shouldReceive('readFixedInteger')->with(1)->andReturn(1);

@@ -19,7 +19,8 @@ final readonly class ConnectionParams
         public ?string $sslCert = null,
         public ?string $sslKey = null,
         public bool $sslVerify = false,
-    ) {}
+    ) {
+    }
 
     /**
      * Creates ConnectionParams from array configuration.

@@ -55,17 +55,17 @@ final class QueryHandler
     private ?StreamStats $primaryStreamStats = null;
 
     /**
-     *  @var Promise<Result|StreamStats>|null 
+     *  @var Promise<Result|StreamStats>|null
      */
     private ?Promise $currentPromise = null;
 
     /**
-     *  @var array<int, string> 
+     *  @var array<int, string>
      */
     private array $columns = [];
 
     /**
-     *  @var array<int, array<string, mixed>> 
+     *  @var array<int, array<string, mixed>>
      */
     private array $rows = [];
 
