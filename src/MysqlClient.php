@@ -22,7 +22,6 @@ use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Sql\IsolationLevelInterface;
 use Hibla\Sql\Result as ResultInterface;
-
 use Hibla\Sql\SqlClientInterface;
 use Hibla\Sql\Transaction as TransactionInterface;
 
@@ -41,7 +40,7 @@ final class MysqlClient implements SqlClientInterface
     private ?PoolManager $pool = null;
 
     /**
-     *  @var \WeakMap<Connection, ArrayCache>|null
+     * @var \WeakMap<Connection, ArrayCache>|null
      */
     private ?\WeakMap $statementCaches = null;
 
@@ -81,12 +80,12 @@ final class MysqlClient implements SqlClientInterface
                 $idleTimeout,
                 $maxLifetime
             );
-            $this->statementCacheSize = $statementCacheSize;
+            $this->statementCacheSize  = $statementCacheSize;
             $this->enableStatementCache = $enableStatementCache;
 
             if ($this->enableStatementCache) {
                 /** @var \WeakMap<Connection, ArrayCache> $map */
-                $map = new \WeakMap();
+                $map                  = new \WeakMap();
                 $this->statementCaches = $map;
             }
 
@@ -102,85 +101,87 @@ final class MysqlClient implements SqlClientInterface
 
     /**
      * {@inheritdoc}
+     *
+     * @return PromiseInterface<ManagedPreparedStatement>
      */
     public function prepare(string $sql): PromiseInterface
     {
-        $pool = $this->getPool();
+        $pool       = $this->getPool();
         $connection = null;
 
-        return $pool->get()
-            ->then(function (Connection $conn) use ($sql, $pool, &$connection) {
-                $connection = $conn;
+        return $this->withCancellation(
+            $pool->get()
+                ->then(function (Connection $conn) use ($sql, $pool, &$connection) {
+                    $connection = $conn;
 
-                return $conn->prepare($sql)
-                    ->then(function (PreparedStatement $stmt) use ($conn, $pool) {
-                        return new ManagedPreparedStatement($stmt, $conn, $pool);
-                    })
-                ;
-            })
-            ->catch(function (\Throwable $e) use ($pool, &$connection) {
-                if ($connection !== null) {
-                    $pool->release($connection);
-                }
+                    return $conn->prepare($sql)
+                        ->then(function (PreparedStatement $stmt) use ($conn, $pool) {
+                            return new ManagedPreparedStatement($stmt, $conn, $pool);
+                        })
+                    ;
+                })
+                ->catch(function (\Throwable $e) use ($pool, &$connection) {
+                    if ($connection !== null) {
+                        $pool->release($connection);
+                    }
 
-                throw $e;
-            })
-        ;
+                    throw $e;
+                })
+        );
     }
 
     /**
      * {@inheritdoc}
      *
+     * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
+     * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
+     *
      * @return PromiseInterface<MysqlResult>
      */
     public function query(string $sql, array $params = []): PromiseInterface
     {
-        $pool = $this->getPool();
+        $pool       = $this->getPool();
         $connection = null;
 
-        return $pool->get()
-            ->then(function (Connection $conn) use ($sql, $params, &$connection) {
-                $connection = $conn;
+        return $this->withCancellation(
+            $pool->get()
+                ->then(function (Connection $conn) use ($sql, $params, &$connection) {
+                    $connection = $conn;
 
-                if (\count($params) === 0) {
-                    return $conn->query($sql);
-                }
+                    if (\count($params) === 0) {
+                        return $conn->query($sql);
+                    }
 
-                if ($this->enableStatementCache) {
-                    return $this->getCachedStatement($conn, $sql)
-                        ->then(function (PreparedStatement $stmt) use ($params) {
+                    if ($this->enableStatementCache) {
+                        return $this->getCachedStatement($conn, $sql)
+                            ->then(function (PreparedStatement $stmt) use ($params) {
+                                return $stmt->execute($params);
+                            })
+                        ;
+                    }
+
+                    /** @var PreparedStatement|null $stmtRef */
+                    $stmtRef = null;
+
+                    return $conn->prepare($sql)
+                        ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
+                            $stmtRef = $stmt;
+
                             return $stmt->execute($params);
                         })
+                        ->finally(function () use (&$stmtRef): void {
+                            if ($stmtRef !== null) {
+                                $stmtRef->close();
+                            }
+                        })
                     ;
-                }
-
-                /** @var PreparedStatement|null $stmtRef */
-                $stmtRef = null;
-
-                return $conn->prepare($sql)
-                    ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
-                        $stmtRef = $stmt;
-
-                        return $stmt->execute($params);
-                    })
-                    ->finally(function () use (&$stmtRef): ?PromiseInterface {
-                        if ($stmtRef !== null) {
-                            /** @var PromiseInterface<void> $promise */
-                            $promise = $stmtRef->close();
-
-                            return $promise;
-                        }
-
-                        return null;
-                    })
-                ;
-            })
-            ->finally(function () use ($pool, &$connection): void {
-                if ($connection !== null) {
-                    $pool->release($connection);
-                }
-            })
-        ;
+                })
+                ->finally(function () use ($pool, &$connection): void {
+                    if ($connection !== null) {
+                        $pool->release($connection);
+                    }
+                })
+        );
     }
 
     /**
@@ -188,9 +189,10 @@ final class MysqlClient implements SqlClientInterface
      */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
-        return $this->query($sql, $params)
-            ->then(fn (ResultInterface $result) => $result->getAffectedRows())
-        ;
+        return $this->withCancellation(
+            $this->query($sql, $params)
+                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
+        );
     }
 
     /**
@@ -198,9 +200,10 @@ final class MysqlClient implements SqlClientInterface
      */
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
-        return $this->query($sql, $params)
-            ->then(fn (ResultInterface $result) => $result->getLastInsertId())
-        ;
+        return $this->withCancellation(
+            $this->query($sql, $params)
+                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
+        );
     }
 
     /**
@@ -208,9 +211,10 @@ final class MysqlClient implements SqlClientInterface
      */
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
-        return $this->query($sql, $params)
-            ->then(fn (ResultInterface $result) => $result->fetchOne())
-        ;
+        return $this->withCancellation(
+            $this->query($sql, $params)
+                ->then(fn(ResultInterface $result) => $result->fetchOne())
+        );
     }
 
     /**
@@ -218,16 +222,17 @@ final class MysqlClient implements SqlClientInterface
      */
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
-        return $this->query($sql, $params)
-            ->then(function (ResultInterface $result) use ($column) {
-                $row = $result->fetchOne();
-                if ($row === null) {
-                    return null;
-                }
+        return $this->withCancellation(
+            $this->query($sql, $params)
+                ->then(function (ResultInterface $result) use ($column) {
+                    $row = $result->fetchOne();
+                    if ($row === null) {
+                        return null;
+                    }
 
-                return $row[$column] ?? null;
-            })
-        ;
+                    return $row[$column] ?? null;
+                })
+        );
     }
 
     /**
@@ -243,42 +248,56 @@ final class MysqlClient implements SqlClientInterface
      */
     public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
     {
-        $pool = $this->getPool();
+        $pool       = $this->getPool();
+        $connection = null;
+        $released   = false;
 
-        return $pool->get()
-            ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool) {
+        $releaseOnce = function () use ($pool, &$connection, &$released): void {
+            if ($released || $connection === null) {
+                return;
+            }
+            $released = true;
+            $pool->release($connection);
+        };
 
-                if (\count($params) === 0) {
-                    $streamPromise = $conn->streamQuery($sql, $bufferSize);
-                } else {
-                    $streamPromise = $this->getCachedStatement($conn, $sql)
-                        ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
-                            return $stmt->executeStream(array_values($params), $bufferSize);
-                        })
-                    ;
-                }
+        return $this->withCancellation(
+            $pool->get()
+                ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, &$connection, &$released, $releaseOnce) {
+                    $connection = $conn;
 
-                /** @var PromiseInterface<MysqlRowStream> $finalPromise */
-                $finalPromise = $streamPromise->then(
-                    function (MysqlRowStream $stream) use ($conn, $pool): MysqlRowStream {
-                        if ($stream instanceof Internals\RowStream) {
-                            $stream->waitForCommand()->finally(fn () => $pool->release($conn));
-                        } else {
-                            $pool->release($conn);
-                        }
-
-                        return $stream;
-                    },
-                    function (\Throwable $e) use ($conn, $pool): never {
-                        $pool->release($conn);
-
-                        throw $e;
+                    if (\count($params) === 0) {
+                        $streamPromise = $conn->streamQuery($sql, $bufferSize);
+                    } else {
+                        $streamPromise = $this->getCachedStatement($conn, $sql)
+                            ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
+                                return $stmt->executeStream(array_values($params), $bufferSize);
+                            });
                     }
-                );
 
-                return $finalPromise;
-            })
-        ;
+                    return $streamPromise->then(
+                        function (MysqlRowStream $stream) use ($conn, $pool, &$released): MysqlRowStream {
+                            if ($stream instanceof Internals\RowStream) {
+                                $stream->waitForCommand()->finally(function () use ($pool, $conn, &$released): void {
+                                    $released = true;
+                                    $pool->release($conn);
+                                });
+                            } else {
+                                $released = true;
+                                $pool->release($conn);
+                            }
+
+                            return $stream;
+                        },
+                        function (\Throwable $e) use ($conn, $pool, &$released): never {
+                            $released = true;
+                            $pool->release($conn);
+
+                            throw $e;
+                        }
+                    );
+                })
+                ->finally($releaseOnce)
+        );
     }
 
     /**
@@ -286,30 +305,31 @@ final class MysqlClient implements SqlClientInterface
      */
     public function beginTransaction(?IsolationLevelInterface $isolationLevel = null): PromiseInterface
     {
-        $pool = $this->getPool();
+        $pool       = $this->getPool();
         $connection = null;
 
-        return $pool->get()
-            ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
-                $connection = $conn;
+        return $this->withCancellation(
+            $pool->get()
+                ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
+                    $connection = $conn;
 
-                $promise = $isolationLevel !== null
-                    ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
-                    ->then(fn () => $conn->query('START TRANSACTION'))
-                    : $conn->query('START TRANSACTION');
+                    $promise = $isolationLevel !== null
+                        ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
+                        ->then(fn() => $conn->query('START TRANSACTION'))
+                        : $conn->query('START TRANSACTION');
 
-                return $promise->then(function () use ($conn, $pool) {
-                    return new Transaction($conn, $pool);
-                });
-            })
-            ->catch(function (\Throwable $e) use ($pool, &$connection) {
-                if ($connection !== null) {
-                    $pool->release($connection);
-                }
+                    return $promise->then(function () use ($conn, $pool) {
+                        return new Transaction($conn, $pool);
+                    });
+                })
+                ->catch(function (\Throwable $e) use ($pool, &$connection) {
+                    if ($connection !== null) {
+                        $pool->release($connection);
+                    }
 
-                throw $e;
-            })
-        ;
+                    throw $e;
+                })
+        );
     }
 
     /**
@@ -336,7 +356,7 @@ final class MysqlClient implements SqlClientInterface
                     /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn () => $callback($tx)));
+                    $result = await(async(fn() => $callback($tx)));
 
                     await($tx->commit());
 
@@ -391,7 +411,7 @@ final class MysqlClient implements SqlClientInterface
         }
 
         $clientStats['statement_cache_enabled'] = $this->enableStatementCache;
-        $clientStats['statement_cache_size'] = $this->statementCacheSize;
+        $clientStats['statement_cache_size']     = $this->statementCacheSize;
 
         return $clientStats;
     }
@@ -403,7 +423,7 @@ final class MysqlClient implements SqlClientInterface
     {
         if ($this->statementCaches !== null) {
             /** @var \WeakMap<Connection, ArrayCache> $map */
-            $map = new \WeakMap();
+            $map                   = new \WeakMap();
             $this->statementCaches = $map;
         }
     }
@@ -423,17 +443,39 @@ final class MysqlClient implements SqlClientInterface
         }
 
         $this->statementCaches = null;
-        $this->isInitialized = false;
+        $this->isInitialized   = false;
     }
 
     /**
      * Destructor ensures cleanup on object destruction.
-     *
-     * @return void
      */
     public function __destruct()
     {
         $this->close();
+    }
+
+    /**
+     * Bridges cancel() → cancelChain() on a public-facing promise.
+     *
+     * Public methods return the LEAF of a promise chain. When a user calls
+     * cancel() on that leaf, it only cancels that node and its children —
+     * it never reaches the ROOT where the real onCancel handler (KILL QUERY,
+     * connection release) lives.
+     *
+     * This bridge registers an onCancel hook so that cancel() on the leaf
+     * immediately walks up to the root via cancelChain(), triggering all
+     * cleanup handlers correctly — including KILL QUERY dispatch in Connection
+     * and connection release back to the pool.
+     *
+     * @template T
+     * @param PromiseInterface<T> $promise
+     * @return PromiseInterface<T>
+     */
+    private function withCancellation(PromiseInterface $promise): PromiseInterface
+    {
+        $promise->onCancel($promise->cancelChain(...));
+
+        return $promise;
     }
 
     /**

@@ -24,21 +24,32 @@ use Throwable;
  * All pooling logic is handled automatically by the `MysqlClient`. You should
  * never need to interact with the `PoolManager` directly.
  *
- * This class is not subject to any backward compatibility (BC) guarantees. Its
- * methods, properties, and overall behavior may change without notice in any
- * patch, minor, or major version.
+ * ## Cancellation and Connection Reuse
  *
- * @see \Hibla\Mysql\MysqlClient
+ * When a query is cancelled via KILL QUERY, MySQL sets a stale kill flag on
+ * the server-side thread. Before this connection can be safely reused, the
+ * pool must absorb this flag by issuing `DO SLEEP(0)` asynchronously. During
+ * this absorption phase the connection is tracked in `$drainingConnections`
+ * to guarantee it is never lost — even if `close()` is called mid-drain.
+ *
+ * ## Kill Connections
+ *
+ * KILL QUERY requires a separate TCP connection to the same server (MySQL
+ * protocol limitation). These kill connections are intentionally created
+ * outside the pool — they are brief, critical, and must never be blocked by
+ * pool capacity limits. They are always closed immediately after use.
+ *
+ * This class is not subject to any backward compatibility (BC) guarantees.
  */
 class PoolManager
 {
     /**
-     * @var SplQueue<MysqlConnection>
+     * @var SplQueue<MysqlConnection> Idle connections available for reuse.
      */
     private SplQueue $pool;
 
     /**
-     * @var SplQueue<Promise<MysqlConnection>>
+     * @var SplQueue<Promise<MysqlConnection>> Callers waiting for a connection.
      */
     private SplQueue $waiters;
 
@@ -46,51 +57,42 @@ class PoolManager
 
     private int $activeConnections = 0;
 
-    /**
-     * @var ConnectionParams
-     */
     private ConnectionParams $connectionParams;
 
-    /**
-     * @var ConnectorInterface|null
-     */
     private ?ConnectorInterface $connector;
 
-    /**
-     * @var bool
-     */
     private bool $configValidated = false;
 
-    /**
-     * @var int
-     */
     private int $idleTimeoutNanos;
 
-    /**
-     * @var int
-     */
     private int $maxLifetimeNanos;
 
     /**
-     * @var array<int, int>
+     * @var array<int, int> Last-used timestamp (nanoseconds) keyed by spl_object_id.
      */
     private array $connectionLastUsed = [];
 
     /**
-     * @var array<int, int>
+     * @var array<int, int> Creation timestamp (nanoseconds) keyed by spl_object_id.
      */
     private array $connectionCreatedAt = [];
 
     /**
-     * Creates a new MySQL connection pool.
+     * Connections currently absorbing a stale KILL flag via DO SLEEP(0).
+     * Tracked to prevent leaks if close() is called during drain.
      *
-     * @param ConnectionParams|array<string, mixed>|string $config The database connection parameters.
-     * @param int $maxSize The maximum number of connections this pool can manage.
-     * @param int $idleTimeout Seconds a connection can stay idle before closure (default: 300 / 5 mins).
-     * @param int $maxLifetime Seconds a connection can live in total before rotation (default: 3600 / 1 hour).
-     * @param ConnectorInterface|null $connector Optional custom socket connector instance.
-     *
-     * @throws InvalidArgumentException If the database configuration is invalid.
+     * @var array<int, MysqlConnection> keyed by spl_object_id.
+     */
+    private array $drainingConnections = [];
+
+    private bool $isClosing = false;
+
+    /**
+     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param int $maxSize
+     * @param int $idleTimeout Seconds before an idle connection is closed.
+     * @param int $maxLifetime Seconds before a connection is rotated.
+     * @param ConnectorInterface|null $connector
      */
     public function __construct(
         ConnectionParams|array|string $config,
@@ -117,26 +119,31 @@ class PoolManager
             throw new InvalidArgumentException('Max lifetime must be greater than 0');
         }
 
-        $this->configValidated = true;
-        $this->maxSize = $maxSize;
-        $this->connector = $connector;
-
-        $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
-        $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
-
-        $this->pool = new SplQueue();
-        $this->waiters = new SplQueue();
+        $this->configValidated    = true;
+        $this->maxSize            = $maxSize;
+        $this->connector          = $connector;
+        $this->idleTimeoutNanos   = $idleTimeout * 1_000_000_000;
+        $this->maxLifetimeNanos   = $maxLifetime * 1_000_000_000;
+        $this->pool               = new SplQueue();
+        $this->waiters            = new SplQueue();
     }
 
     /**
      * Asynchronously acquires a connection from the pool.
      *
      * Uses "Check-on-Borrow" strategy:
-     * 1. Checks if the idle connection has exceeded idle timeout.
-     * 2. Checks if the connection has exceeded max lifetime.
-     * 3. Checks if the connection is still alive (TCP state).
+     * 1. Idle timeout exceeded → discard.
+     * 2. Max lifetime exceeded → discard.
+     * 3. Not ready / closed → discard.
      *
-     * @return PromiseInterface<MysqlConnection> A promise that resolves with a database connection.
+     * If no idle connection is available and the pool is not at capacity,
+     * a new connection is created. Otherwise the caller is queued as a waiter.
+     *
+     * Waiter promises support cancellation: if the returned promise is cancelled
+     * before a connection becomes available, the waiter is silently skipped on
+     * the next `release()` call without affecting pool accounting.
+     *
+     * @return PromiseInterface<MysqlConnection>
      */
     public function get(): PromiseInterface
     {
@@ -144,145 +151,95 @@ class PoolManager
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
 
-            $connId = spl_object_id($connection);
-            $now = (int) hrtime(true);
-
-            $lastUsed = $this->connectionLastUsed[$connId] ?? 0;
+            $connId    = spl_object_id($connection);
+            $now       = (int) hrtime(true);
+            $lastUsed  = $this->connectionLastUsed[$connId] ?? 0;
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
 
-            // 1. Check Idle Timeout
             if (($now - $lastUsed) > $this->idleTimeoutNanos) {
                 $this->removeConnection($connection);
-
                 continue;
             }
 
-            // 2. Check Max Lifetime
             if (($now - $createdAt) > $this->maxLifetimeNanos) {
                 $this->removeConnection($connection);
-
                 continue;
             }
 
-            // 3. Check Connection Health (TCP State)
             if (! $connection->isReady() || $connection->isClosed()) {
                 $this->removeConnection($connection);
-
                 continue;
             }
 
-            // Valid Connection Found!
-            // Remove from idle tracking (it's active now)
             unset($this->connectionLastUsed[$connId]);
-
-            // Resume the connection (re-attach event loop listeners)
             $connection->resume();
 
             return Promise::resolved($connection);
         }
 
-        // If here: pool is empty or we discarded all stale connections.
         if ($this->activeConnections < $this->maxSize) {
-            $this->activeConnections++;
-
-            /** @var Promise<MysqlConnection> $promise */
-            $promise = new Promise();
-
-            MysqlConnection::create($this->connectionParams, $this->connector)
-                ->then(
-                    function (MysqlConnection $connection) use ($promise): void {
-                        // Track creation time for Max Lifetime
-                        $connId = spl_object_id($connection);
-                        $this->connectionCreatedAt[$connId] = (int) hrtime(true);
-
-                        $promise->resolve($connection);
-                    },
-                    function (Throwable $e) use ($promise): void {
-                        $this->activeConnections--;
-                        $promise->reject($e);
-                    }
-                )
-            ;
-
-            return $promise;
+            return $this->createNewConnection();
         }
 
-        // Queue the request if at capacity
-        /** @var Promise<MysqlConnection> $promise */
-        $promise = new Promise();
-        $this->waiters->enqueue($promise);
+        // At capacity — enqueue a waiter.
+        /** @var Promise<MysqlConnection> $waiterPromise */
+        $waiterPromise = new Promise();
+        $this->waiters->enqueue($waiterPromise);
 
-        return $promise;
+        return $waiterPromise;
     }
 
     /**
      * Releases a connection back to the pool.
      *
-     * @param MysqlConnection $connection The connection to release.
+     * If the connection has a pending stale KILL flag (`wasQueryCancelled()`),
+     * it is placed into a draining phase: `DO SLEEP(0)` is issued asynchronously
+     * to absorb the flag before the connection is returned to service. The
+     * connection is tracked in `$drainingConnections` throughout this phase
+     * so it cannot be lost.
+     *
+     * @param MysqlConnection $connection
      */
     public function release(MysqlConnection $connection): void
     {
-        // Check if connection is still alive
         if ($connection->isClosed() || ! $connection->isReady()) {
             $this->removeConnection($connection);
-
-            if (! $this->waiters->isEmpty() && $this->activeConnections < $this->maxSize) {
-                $this->createConnectionForWaiter();
-            }
-
+            $this->satisfyNextWaiter();
             return;
         }
 
-        // Prioritize giving the connection to a waiting request
-        if (! $this->waiters->isEmpty()) {
-            /** @var Promise<MysqlConnection> $promise */
-            $promise = $this->waiters->dequeue();
-            // Connection stays active (resumed) for the waiter
-            $promise->resolve($connection);
-        } else {
-            // No waiters. Pause the connection to let the loop exit if idle.
-            $connection->pause();
-
-            $connId = spl_object_id($connection);
-            $now = (int) hrtime(true);
-
-            // If it expired while being used, discard it now rather than later.
-            $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
-            if (($now - $createdAt) > $this->maxLifetimeNanos) {
-                $this->removeConnection($connection);
-
-                return;
-            }
-
-            // Track last usage time for Idle Timeout
-            $this->connectionLastUsed[$connId] = $now;
-
-            $this->pool->enqueue($connection);
+        // Absorb stale kill flag before the connection can be reused.
+        if ($connection->wasQueryCancelled()) {
+            $this->drainAndRelease($connection);
+            return;
         }
+
+        $this->releaseClean($connection);
     }
 
     /**
-     * Retrieves statistics about the current state of the connection pool.
-     *
-     * @return array<string, mixed> An associative array with pool metrics.
+     * {@inheritdoc}
      */
     public function getStats(): array
     {
         return [
-            'active_connections' => $this->activeConnections,
-            'pooled_connections' => $this->pool->count(),
-            'waiting_requests' => $this->waiters->count(),
-            'max_size' => $this->maxSize,
-            'config_validated' => $this->configValidated,
-            'tracked_connections' => count($this->connectionCreatedAt),
+            'active_connections'  => $this->activeConnections,
+            'pooled_connections'  => $this->pool->count(),
+            'waiting_requests'    => $this->waiters->count(),
+            'draining_connections'=> \count($this->drainingConnections),
+            'max_size'            => $this->maxSize,
+            'config_validated'    => $this->configValidated,
+            'tracked_connections' => \count($this->connectionCreatedAt),
         ];
     }
 
     /**
-     * Closes all connections and shuts down the pool.
+     * Closes all connections in all states (idle, draining) and rejects all waiters.
      */
     public function close(): void
     {
+        $this->isClosing = true;
+
         while (! $this->pool->isEmpty()) {
             $connection = $this->pool->dequeue();
             if (! $connection->isClosed()) {
@@ -290,24 +247,34 @@ class PoolManager
             }
         }
 
+        // Close connections that are mid-drain so they are not leaked.
+        foreach ($this->drainingConnections as $connection) {
+            if (! $connection->isClosed()) {
+                $connection->close();
+            }
+        }
+        $this->drainingConnections = [];
+
         while (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
             $promise = $this->waiters->dequeue();
-            $promise->reject(new PoolException('Pool is being closed'));
+            if (! $promise->isCancelled()) {
+                $promise->reject(new PoolException('Pool is being closed'));
+            }
         }
 
-        $this->pool = new SplQueue();
-        $this->waiters = new SplQueue();
-        $this->activeConnections = 0;
-
-        $this->connectionLastUsed = [];
-        $this->connectionCreatedAt = [];
+        $this->pool                 = new SplQueue();
+        $this->waiters              = new SplQueue();
+        $this->activeConnections    = 0;
+        $this->connectionLastUsed   = [];
+        $this->connectionCreatedAt  = [];
+        $this->isClosing            = false;
     }
 
     /**
-     * Pings all idle connections in the pool to check their health.
+     * Pings all idle connections to verify health.
      *
-     * @return PromiseInterface<array<string, int>> A promise that resolves with health statistics.
+     * @return PromiseInterface<array<string, int>>
      */
     public function healthCheck(): PromiseInterface
     {
@@ -316,8 +283,8 @@ class PoolManager
 
         $stats = [
             'total_checked' => 0,
-            'healthy' => 0,
-            'unhealthy' => 0,
+            'healthy'       => 0,
+            'unhealthy'     => 0,
         ];
 
         /** @var SplQueue<MysqlConnection> $tempQueue */
@@ -326,12 +293,10 @@ class PoolManager
         /** @var array<int, PromiseInterface<bool>> $checkPromises */
         $checkPromises = [];
 
-        // Check all connections currently in the pool
         while (! $this->pool->isEmpty()) {
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
             $stats['total_checked']++;
-
             $connection->resume();
 
             $checkPromises[] = $connection->ping()
@@ -339,10 +304,8 @@ class PoolManager
                     function () use ($connection, $tempQueue, &$stats): void {
                         $stats['healthy']++;
                         $connection->pause();
-
                         $connId = spl_object_id($connection);
                         $this->connectionLastUsed[$connId] = (int) hrtime(true);
-
                         $tempQueue->enqueue($connection);
                     },
                     function () use ($connection, &$stats): void {
@@ -353,22 +316,17 @@ class PoolManager
             ;
         }
 
-        // Wait for all pings to complete
         Promise::all($checkPromises)
             ->then(
                 function () use ($promise, $tempQueue, &$stats): void {
                     while (! $tempQueue->isEmpty()) {
-                        /** @var MysqlConnection $conn */
-                        $conn = $tempQueue->dequeue();
-                        $this->pool->enqueue($conn);
+                        $this->pool->enqueue($tempQueue->dequeue());
                     }
                     $promise->resolve($stats);
                 },
                 function (Throwable $e) use ($promise, $tempQueue): void {
                     while (! $tempQueue->isEmpty()) {
-                        /** @var MysqlConnection $conn */
-                        $conn = $tempQueue->dequeue();
-                        $this->pool->enqueue($conn);
+                        $this->pool->enqueue($tempQueue->dequeue());
                     }
                     $promise->reject($e);
                 }
@@ -378,11 +336,198 @@ class PoolManager
         return $promise;
     }
 
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
     /**
-     * Removes and closes a connection, cleaning up all tracking data.
+     * Absorbs a stale KILL flag by issuing `DO SLEEP(0)` on the connection,
+     * then re-releases it once the flag is cleared.
      *
-     * @param MysqlConnection $connection The connection to remove.
-     * @return void
+     * The connection is tracked in `$drainingConnections` for the duration so
+     * it cannot be lost if `close()` is called while the drain is in progress.
+     *
+     * The `DO SLEEP(0)` may resolve normally or reject with ERR 1317 (query
+     * interrupted) depending on whether the KILL arrived before or after the
+     * original query completed. Both outcomes are valid — the flag is consumed
+     * either way.
+     */
+    private function drainAndRelease(MysqlConnection $connection): void
+    {
+        if ($this->isClosing) {
+            $this->removeConnection($connection);
+            return;
+        }
+
+        $connId = spl_object_id($connection);
+        $this->drainingConnections[$connId] = $connection;
+
+        $connection->query('DO SLEEP(0)')
+            ->then(
+                function () use ($connection, $connId): void {
+                    unset($this->drainingConnections[$connId]);
+
+                    if ($this->isClosing) {
+                        $this->removeConnection($connection);
+                        return;
+                    }
+
+                    $connection->clearCancelledFlag();
+                    $this->releaseClean($connection);
+                },
+                function () use ($connection, $connId): void {
+                    // ERR 1317 "Query execution was interrupted" — expected,
+                    // means the kill arrived after query completion. Flag consumed.
+                    unset($this->drainingConnections[$connId]);
+
+                    if ($this->isClosing) {
+                        $this->removeConnection($connection);
+                        return;
+                    }
+
+                    $connection->clearCancelledFlag();
+
+                    // Connection may no longer be ready after the error packet.
+                    if ($connection->isClosed() || ! $connection->isReady()) {
+                        $this->removeConnection($connection);
+                        $this->satisfyNextWaiter();
+                        return;
+                    }
+
+                    $this->releaseClean($connection);
+                }
+            )
+        ;
+    }
+
+    /**
+     * Releases a clean (no pending kill flag) connection: either hands it to
+     * a waiting caller or parks it in the idle pool.
+     *
+     * Skips any cancelled waiter promises rather than resolving them.
+     */
+    private function releaseClean(MysqlConnection $connection): void
+    {
+        // Hand directly to a non-cancelled waiter if one exists.
+        $waiter = $this->dequeueActiveWaiter();
+
+        if ($waiter !== null) {
+            $connection->resume();
+            $waiter->resolve($connection);
+            return;
+        }
+
+        // No waiters — park in idle pool.
+        $connection->pause();
+
+        $connId    = spl_object_id($connection);
+        $now       = (int) hrtime(true);
+        $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
+
+        if (($now - $createdAt) > $this->maxLifetimeNanos) {
+            $this->removeConnection($connection);
+            return;
+        }
+
+        $this->connectionLastUsed[$connId] = $now;
+        $this->pool->enqueue($connection);
+    }
+
+    /**
+     * Creates a new connection and resolves the returned promise on success.
+     *
+     * @return Promise<MysqlConnection>
+     */
+    private function createNewConnection(): Promise
+    {
+        $this->activeConnections++;
+
+        /** @var Promise<MysqlConnection> $promise */
+        $promise = new Promise();
+
+        MysqlConnection::create($this->connectionParams, $this->connector)
+            ->then(
+                function (MysqlConnection $connection) use ($promise): void {
+                    $connId = spl_object_id($connection);
+                    $this->connectionCreatedAt[$connId] = (int) hrtime(true);
+                    $promise->resolve($connection);
+                },
+                function (Throwable $e) use ($promise): void {
+                    $this->activeConnections--;
+                    $promise->reject($e);
+                }
+            )
+        ;
+
+        return $promise;
+    }
+
+    /**
+     * Creates a new connection specifically to satisfy the next queued waiter.
+     */
+    private function createConnectionForWaiter(): void
+    {
+        $waiter = $this->dequeueActiveWaiter();
+
+        if ($waiter === null) {
+            return;
+        }
+
+        $this->activeConnections++;
+
+        MysqlConnection::create($this->connectionParams, $this->connector)
+            ->then(
+                function (MysqlConnection $connection) use ($waiter): void {
+                    $connId = spl_object_id($connection);
+                    $this->connectionCreatedAt[$connId] = (int) hrtime(true);
+                    $waiter->resolve($connection);
+                },
+                function (Throwable $e) use ($waiter): void {
+                    $this->activeConnections--;
+                    $waiter->reject($e);
+                }
+            )
+        ;
+    }
+
+    /**
+     * Dequeues the next non-cancelled waiter promise, discarding any cancelled
+     * ones encountered along the way.
+     *
+     * Cancelled waiters do not affect pool accounting — the connection slot
+     * they "reserved" is returned to the available capacity immediately.
+     *
+     * @return Promise<MysqlConnection>|null
+     */
+    private function dequeueActiveWaiter(): ?Promise
+    {
+        while (! $this->waiters->isEmpty()) {
+            /** @var Promise<MysqlConnection> $waiter */
+            $waiter = $this->waiters->dequeue();
+
+            if (! $waiter->isCancelled()) {
+                return $waiter;
+            }
+
+            // Cancelled waiter — the caller gave up. No connection needed for it.
+        }
+
+        return null;
+    }
+
+    /**
+     * Satisfies the next waiter if pool capacity allows after a connection
+     * is removed (e.g. health check failure, idle timeout eviction).
+     */
+    private function satisfyNextWaiter(): void
+    {
+        if (! $this->waiters->isEmpty() && $this->activeConnections < $this->maxSize) {
+            $this->createConnectionForWaiter();
+        }
+    }
+
+    /**
+     * Closes and removes a connection, cleaning up all tracking metadata.
      */
     private function removeConnection(MysqlConnection $connection): void
     {
@@ -391,39 +536,13 @@ class PoolManager
         }
 
         $connId = spl_object_id($connection);
-        unset($this->connectionLastUsed[$connId]);
-        unset($this->connectionCreatedAt[$connId]);
+        unset(
+            $this->connectionLastUsed[$connId],
+            $this->connectionCreatedAt[$connId],
+            $this->drainingConnections[$connId]
+        );
 
         $this->activeConnections--;
-    }
-
-    /**
-     * Creates a new connection for a waiting request.
-     *
-     * @return void
-     */
-    private function createConnectionForWaiter(): void
-    {
-        $this->activeConnections++;
-
-        /** @var Promise<MysqlConnection> $promise */
-        $promise = $this->waiters->dequeue();
-
-        MysqlConnection::create($this->connectionParams, $this->connector)
-            ->then(
-                function (MysqlConnection $newConnection) use ($promise): void {
-                    // Track creation time for Max Lifetime
-                    $connId = spl_object_id($newConnection);
-                    $this->connectionCreatedAt[$connId] = (int) hrtime(true);
-
-                    $promise->resolve($newConnection);
-                },
-                function (Throwable $e) use ($promise): void {
-                    $this->activeConnections--;
-                    $promise->reject($e);
-                }
-            )
-        ;
     }
 
     public function __destruct()

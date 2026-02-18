@@ -603,13 +603,15 @@ class Connection
         /** @var Promise<mixed> $protocolPromise */
         $protocolPromise = new Promise();
 
-        $protocolPromise->finally(function () {
-            $this->finishCommand();
-        });
-
         $protocolPromise->then(
-            fn($v) => $command->promise->resolve($v),
-            fn($e) => $command->promise->reject($e)
+            function ($v) use ($command): void {
+                $this->finishCommand();
+                $command->promise->resolve($v);
+            },
+            function (Throwable $e) use ($command): void {
+                $this->finishCommand();
+                $command->promise->reject($e);
+            }
         );
 
         switch ($command->type) {
