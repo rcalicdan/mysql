@@ -81,7 +81,7 @@ class Connection
     private readonly ConnectionParams $params;
 
     private bool $isClosingError = false;
-    
+
     private bool $isUserClosing = false;
 
     /**
@@ -225,43 +225,69 @@ class Connection
         return $this->enqueueCommand(CommandRequest::TYPE_QUERY, $sql);
     }
 
+
     /**
      * Streams a SELECT query row-by-row using a Generator.
+     *
+     * The returned promise stays PENDING until the first server event
+     * (first row, completion, or error) so that cancelling the promise
+     * before any data arrives correctly propagates KILL QUERY.
+     *
+     * After the promise resolves with a RowStream, Phase 2 cancellation
+     * is available via $stream->cancel().
      *
      * @return PromiseInterface<RowStream>
      */
     public function streamQuery(string $sql, int $bufferSize = 100): PromiseInterface
     {
-        return async(function () use ($sql, $bufferSize) {
-            $stream = new RowStream($bufferSize);
+        $stream = new RowStream($bufferSize);
 
-            $stream->setBackpressureHandler(function (bool $shouldPause): void {
-                if ($shouldPause) {
-                    $this->pause();
-                } else {
-                    $this->resume();
-                }
-            });
-
-            $context = new StreamContext(
-                onRow: $stream->push(...),
-                onComplete: $stream->complete(...),
-                onError: $stream->error(...)
-            );
-
-            $promise = $this->enqueueCommand(
-                CommandRequest::TYPE_STREAM_QUERY,
-                $sql,
-                context: $context
-            );
-
-            $promise->then(
-                $stream->markCommandFinished(...),
-                $stream->error(...)
-            );
-
-            return $stream;
+        $stream->setBackpressureHandler(function (bool $shouldPause): void {
+            $shouldPause ? $this->pause() : $this->resume();
         });
+
+        /** @var Promise<RowStream> $outerPromise */
+        $outerPromise = new Promise();
+
+        $context = new StreamContext(
+            onRow: function (array $row) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->resolve($stream);
+                }
+                $stream->push($row);
+            },
+            onComplete: function (StreamStats $stats) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->resolve($stream);
+                }
+                $stream->complete($stats);
+            },
+            onError: function (Throwable $e) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->reject($e);
+                }
+                $stream->error($e);
+            }
+        );
+
+        $commandPromise = $this->enqueueCommand(
+            CommandRequest::TYPE_STREAM_QUERY,
+            $sql,
+            context: $context
+        );
+
+        $stream->setCommandPromise($commandPromise);
+
+        $commandPromise->then(
+            $stream->markCommandFinished(...),
+            $stream->error(...)
+        );
+
+        $outerPromise->onCancel(function () use ($stream): void {
+            $stream->cancel();
+        });
+
+        return $outerPromise;
     }
 
     /**
@@ -582,8 +608,8 @@ class Connection
         });
 
         $protocolPromise->then(
-            fn ($v) => $command->promise->resolve($v),
-            fn ($e) => $command->promise->reject($e)
+            fn($v) => $command->promise->resolve($v),
+            fn($e) => $command->promise->reject($e)
         );
 
         switch ($command->type) {

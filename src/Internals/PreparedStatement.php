@@ -12,6 +12,7 @@ use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Interfaces\PromiseInterface;
+use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\PreparedException;
 use Hibla\Sql\PreparedStatement as PreparedStatementInterface;
 use Hibla\Stream\Traits\PromiseHelperTrait;
@@ -43,8 +44,7 @@ class PreparedStatement implements PreparedStatementInterface
         public readonly int $numParams,
         public readonly array $columnDefinitions = [],
         public readonly array $paramDefinitions = []
-    ) {
-    }
+    ) {}
 
     /**
      * {@inheritdoc}
@@ -88,35 +88,52 @@ class PreparedStatement implements PreparedStatementInterface
             );
         }
 
-        return async(function () use ($params, $bufferSize): MysqlRowStream {
-            $stream = new RowStream($bufferSize);
+        $normalizedParams = $this->normalizeParameters($params);
+        $stream           = new RowStream($bufferSize);
 
-            $stream->setBackpressureHandler(function (bool $shouldPause): void {
-                if ($shouldPause) {
-                    $this->connection->pause();
-                } else {
-                    $this->connection->resume();
-                }
-            });
-
-            $context = new StreamContext(
-                onRow: $stream->push(...),
-                onComplete: $stream->complete(...),
-                onError: $stream->error(...)
-            );
-
-            $normalizedParams = $this->normalizeParameters($params);
-
-            /** @var PromiseInterface<StreamStats> $commandPromise */
-            $commandPromise = $this->connection->executeStream($this, $normalizedParams, $context);
-
-            $commandPromise->then(
-                $stream->markCommandFinished(...),
-                $stream->error(...)
-            );
-
-            return $stream;
+        $stream->setBackpressureHandler(function (bool $shouldPause): void {
+            $shouldPause ? $this->connection->pause() : $this->connection->resume();
         });
+
+        /** @var Promise<MysqlRowStream> $outerPromise */
+        $outerPromise = new Promise();
+
+        $context = new StreamContext(
+            onRow: function (array $row) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->resolve($stream);
+                }
+                $stream->push($row);
+            },
+            onComplete: function (StreamStats $stats) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->resolve($stream);
+                }
+                $stream->complete($stats);
+            },
+            onError: function (\Throwable $e) use ($stream, $outerPromise): void {
+                if ($outerPromise->isPending()) {
+                    $outerPromise->reject($e);
+                }
+                $stream->error($e);
+            }
+        );
+
+        /** @var PromiseInterface<StreamStats> $commandPromise */
+        $commandPromise = $this->connection->executeStream($this, $normalizedParams, $context);
+
+        $stream->setCommandPromise($commandPromise);
+
+        $commandPromise->then(
+            $stream->markCommandFinished(...),
+            $stream->error(...)
+        );
+
+        $outerPromise->onCancel(function () use ($stream): void {
+            $stream->cancel();
+        });
+
+        return $outerPromise;
     }
 
     /**

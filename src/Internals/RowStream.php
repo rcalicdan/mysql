@@ -8,6 +8,8 @@ use function Hibla\await;
 
 use Hibla\Mysql\Interfaces\MysqlRowStream;
 use Hibla\Mysql\ValueObjects\StreamStats;
+use Hibla\Promise\Exceptions\CancelledException;
+use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use SplQueue;
 use Throwable;
@@ -39,11 +41,19 @@ class RowStream implements MysqlRowStream
      */
     private Promise $commandPromise;
 
+    /**
+     * The underlying command promise, held so cancel() can propagate
+     * a KILL QUERY after the outer streamQuery promise has already resolved.
+     */
+    private ?PromiseInterface $commandQueuePromise = null;
+
     private ?StreamStats $stats = null;
 
     private ?Throwable $error = null;
 
     private bool $completed = false;
+
+    private bool $cancelled = false;
 
     /**
      * Callback for backpressure control (pause/resume socket reading).
@@ -71,15 +81,15 @@ class RowStream implements MysqlRowStream
             throw new \InvalidArgumentException('Buffer size must be at least 1');
         }
 
-        $this->maxBufferSize = $bufferSize;
-        $this->resumeThreshold = (int)($bufferSize / 2);
+        $this->maxBufferSize   = $bufferSize;
+        $this->resumeThreshold = (int) ($bufferSize / 2);
 
         /** @var SplQueue<array<string, mixed>> $buffer */
-        $buffer = new SplQueue();
+        $buffer       = new SplQueue();
         $this->buffer = $buffer;
 
         /** @var Promise<void> $commandPromise */
-        $commandPromise = new Promise();
+        $commandPromise       = new Promise();
         $this->commandPromise = $commandPromise;
     }
 
@@ -111,7 +121,7 @@ class RowStream implements MysqlRowStream
             }
 
             /** @var Promise<array<string, mixed>|null> $waiter */
-            $waiter = new Promise();
+            $waiter       = new Promise();
             $this->waiter = $waiter;
 
             /** @var array<string, mixed>|null $row */
@@ -134,6 +144,77 @@ class RowStream implements MysqlRowStream
     }
 
     /**
+     * Cancels the stream (Phase 2 cancellation — after the stream promise has resolved).
+     *
+     * Always sets the cancelled flag regardless of the completed state, so
+     * isCancelled() reliably reflects caller intent even when called after a
+     * fast query that already buffered all rows and called complete().
+     *
+     * If the command is still running (stream not yet completed), it also:
+     *  - Propagates cancel() to the command queue promise → KILL QUERY dispatch
+     *  - Rejects the internal waiter promise → unblocks a suspended foreach
+     *
+     * Calling cancel() more than once is a no-op.
+     */
+    public function cancel(): void
+    {
+        if ($this->cancelled) {
+            return;
+        }
+
+        $this->cancelled = true;
+        // Always set the error so getIterator()'s error check fires on the
+        // next iteration regardless of whether complete() already ran.
+        $this->error = new CancelledException('Stream was cancelled');
+
+        if (! $this->completed) {
+            $this->completed = true;
+
+            if (
+                $this->commandQueuePromise !== null
+                && ! $this->commandQueuePromise->isSettled()
+                && ! $this->commandQueuePromise->isCancelled()
+            ) {
+                $this->commandQueuePromise->cancel();
+            }
+
+            if ($this->waiter !== null) {
+                $waiter       = $this->waiter;
+                $this->waiter = null;
+                $waiter->reject($this->error);
+            }
+        }
+
+        // Discard any buffered rows so they are not yielded after cancellation.
+        // This covers the case where complete() already ran but the caller
+        // cancels mid-iteration before draining the full buffer.
+        while (! $this->buffer->isEmpty()) {
+            $this->buffer->dequeue();
+        }
+    }
+
+    /**
+     * Returns whether this stream has been cancelled.
+     */
+    public function isCancelled(): bool
+    {
+        return $this->cancelled;
+    }
+
+    /**
+     * Stores the command queue promise so cancel() can reach it after
+     * the outer streamQuery promise has already fulfilled.
+     *
+     * Called by Connection::streamQuery() immediately after enqueueCommand().
+     *
+     * @internal
+     */
+    public function setCommandPromise(PromiseInterface $promise): void
+    {
+        $this->commandQueuePromise = $promise;
+    }
+
+    /**
      * Sets the backpressure handler for controlling socket flow.
      *
      * @internal
@@ -152,8 +233,12 @@ class RowStream implements MysqlRowStream
      */
     public function push(array $row): void
     {
+        if ($this->cancelled) {
+            return;
+        }
+
         if ($this->waiter !== null) {
-            $promise = $this->waiter;
+            $promise      = $this->waiter;
             $this->waiter = null;
             $promise->resolve($row);
         } else {
@@ -173,11 +258,15 @@ class RowStream implements MysqlRowStream
      */
     public function complete(StreamStats $stats): void
     {
-        $this->stats = $stats;
+        if ($this->cancelled) {
+            return;
+        }
+
+        $this->stats     = $stats;
         $this->completed = true;
 
         if ($this->waiter !== null) {
-            $promise = $this->waiter;
+            $promise      = $this->waiter;
             $this->waiter = null;
             $promise->resolve(null);
         }
@@ -190,11 +279,15 @@ class RowStream implements MysqlRowStream
      */
     public function error(Throwable $e): void
     {
-        $this->error = $e;
+        if ($this->cancelled) {
+            return;
+        }
+
+        $this->error     = $e;
         $this->completed = true;
 
         if ($this->waiter !== null) {
-            $promise = $this->waiter;
+            $promise      = $this->waiter;
             $this->waiter = null;
             $promise->reject($e);
         }
