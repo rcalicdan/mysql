@@ -85,6 +85,14 @@ class PoolManager
      */
     private array $drainingConnections = [];
 
+    /**
+     * Connections currently checked out by the client.
+     * Tracked to ensure they are closed if the pool is shut down while requests are active.
+     *
+     * @var array<int, MysqlConnection> keyed by spl_object_id.
+     */
+    private array $activeConnectionsMap = [];
+
     private bool $isClosing = false;
 
     /**
@@ -175,6 +183,10 @@ class PoolManager
             }
 
             unset($this->connectionLastUsed[$connId]);
+
+            // Mark as active so it is tracked if closed mid-usage
+            $this->activeConnectionsMap[$connId] = $connection;
+
             $connection->resume();
 
             return Promise::resolved($connection);
@@ -241,7 +253,7 @@ class PoolManager
     }
 
     /**
-     * Closes all connections in all states (idle, draining) and rejects all waiters.
+     * Closes all connections in all states (idle, draining, active) and rejects all waiters.
      */
     public function close(): void
     {
@@ -261,6 +273,14 @@ class PoolManager
             }
         }
         $this->drainingConnections = [];
+
+        // Close active connections to prevent hanging the event loop.
+        foreach ($this->activeConnectionsMap as $connection) {
+            if (! $connection->isClosed()) {
+                $connection->close();
+            }
+        }
+        $this->activeConnectionsMap = [];
 
         while (! $this->waiters->isEmpty()) {
             /** @var Promise<MysqlConnection> $promise */
@@ -361,13 +381,16 @@ class PoolManager
      */
     private function drainAndRelease(MysqlConnection $connection): void
     {
+        $connId = spl_object_id($connection);
+
+        unset($this->activeConnectionsMap[$connId]);
+
         if ($this->isClosing) {
             $this->removeConnection($connection);
 
             return;
         }
 
-        $connId = spl_object_id($connection);
         $this->drainingConnections[$connId] = $connection;
 
         $connection->query('DO SLEEP(0)')
@@ -382,6 +405,8 @@ class PoolManager
                     }
 
                     $connection->clearCancelledFlag();
+                    // Mark active again for releaseClean logic
+                    $this->activeConnectionsMap[$connId] = $connection;
                     $this->releaseClean($connection);
                 },
                 function () use ($connection, $connId): void {
@@ -405,6 +430,7 @@ class PoolManager
                         return;
                     }
 
+                    $this->activeConnectionsMap[$connId] = $connection;
                     $this->releaseClean($connection);
                 }
             )
@@ -424,6 +450,7 @@ class PoolManager
 
         if ($waiter !== null) {
             $connection->resume();
+            // Connection remains in activeConnectionsMap
             $waiter->resolve($connection);
 
             return;
@@ -443,6 +470,9 @@ class PoolManager
         }
 
         $this->connectionLastUsed[$connId] = $now;
+
+        // Remove from Active, move to Pool
+        unset($this->activeConnectionsMap[$connId]);
         $this->pool->enqueue($connection);
     }
 
@@ -463,6 +493,10 @@ class PoolManager
                 function (MysqlConnection $connection) use ($promise): void {
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
+
+                    // Mark as active
+                    $this->activeConnectionsMap[$connId] = $connection;
+
                     $promise->resolve($connection);
                 },
                 function (Throwable $e) use ($promise): void {
@@ -493,6 +527,9 @@ class PoolManager
                 function (MysqlConnection $connection) use ($waiter): void {
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
+
+                    // Mark as active
+                    $this->activeConnectionsMap[$connId] = $connection;
 
                     if ($waiter->isCancelled()) {
                         $this->releaseClean($connection);
@@ -559,7 +596,8 @@ class PoolManager
         unset(
             $this->connectionLastUsed[$connId],
             $this->connectionCreatedAt[$connId],
-            $this->drainingConnections[$connId]
+            $this->drainingConnections[$connId],
+            $this->activeConnectionsMap[$connId] 
         );
 
         $this->activeConnections--;
