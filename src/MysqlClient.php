@@ -46,8 +46,6 @@ final class MysqlClient implements SqlClientInterface
 
     private int $statementCacheSize;
 
-    private bool $isInitialized = false;
-
     private bool $enableStatementCache;
 
     /**
@@ -80,16 +78,14 @@ final class MysqlClient implements SqlClientInterface
                 $idleTimeout,
                 $maxLifetime
             );
-            $this->statementCacheSize  = $statementCacheSize;
+            $this->statementCacheSize = $statementCacheSize;
             $this->enableStatementCache = $enableStatementCache;
 
             if ($this->enableStatementCache) {
                 /** @var \WeakMap<Connection, ArrayCache> $map */
-                $map                  = new \WeakMap();
+                $map = new \WeakMap();
                 $this->statementCaches = $map;
             }
-
-            $this->isInitialized = true;
         } catch (\InvalidArgumentException $e) {
             throw new ConfigurationException(
                 'Invalid database configuration: ' . $e->getMessage(),
@@ -106,7 +102,7 @@ final class MysqlClient implements SqlClientInterface
      */
     public function prepare(string $sql): PromiseInterface
     {
-        $pool       = $this->getPool();
+        $pool = $this->getPool();
         $connection = null;
 
         return $this->withCancellation(
@@ -136,11 +132,12 @@ final class MysqlClient implements SqlClientInterface
      * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
      * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
      *
+     * @param array<int|string, mixed> $params
      * @return PromiseInterface<MysqlResult>
      */
     public function query(string $sql, array $params = []): PromiseInterface
     {
-        $pool       = $this->getPool();
+        $pool = $this->getPool();
         $connection = null;
 
         return $this->withCancellation(
@@ -186,39 +183,51 @@ final class MysqlClient implements SqlClientInterface
 
     /**
      * {@inheritdoc}
+     *
+     * @param array<int|string, mixed> $params
+     * @return PromiseInterface<int>
      */
     public function execute(string $sql, array $params = []): PromiseInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
+                ->then(fn (ResultInterface $result) => $result->getAffectedRows())
         );
     }
 
     /**
      * {@inheritdoc}
+     *
+     * @param array<int|string, mixed> $params
+     * @return PromiseInterface<int>
      */
     public function executeGetId(string $sql, array $params = []): PromiseInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
+                ->then(fn (ResultInterface $result) => $result->getLastInsertId())
         );
     }
 
     /**
      * {@inheritdoc}
+     *
+     * @param array<int|string, mixed> $params
+     * @return PromiseInterface<array<string, mixed>|null>
      */
     public function fetchOne(string $sql, array $params = []): PromiseInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->fetchOne())
+                ->then(fn (ResultInterface $result) => $result->fetchOne())
         );
     }
 
     /**
      * {@inheritdoc}
+     *
+     * @param array<int|string, mixed> $params
+     * @return PromiseInterface<mixed>
      */
     public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
     {
@@ -226,6 +235,7 @@ final class MysqlClient implements SqlClientInterface
             $this->query($sql, $params)
                 ->then(function (ResultInterface $result) use ($column) {
                     $row = $result->fetchOne();
+
                     if ($row === null) {
                         return null;
                     }
@@ -248,9 +258,9 @@ final class MysqlClient implements SqlClientInterface
      */
     public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
     {
-        $pool       = $this->getPool();
+        $pool = $this->getPool();
         $connection = null;
-        $released   = false;
+        $released = false;
 
         $releaseOnce = function () use ($pool, &$connection, &$released): void {
             if ($released || $connection === null) {
@@ -271,7 +281,8 @@ final class MysqlClient implements SqlClientInterface
                         $innerStreamPromise = $this->getCachedStatement($conn, $sql)
                             ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
                                 return $stmt->executeStream(array_values($params), $bufferSize);
-                            });
+                            })
+                        ;
                     }
 
                     $q = $innerStreamPromise->then(
@@ -313,10 +324,12 @@ final class MysqlClient implements SqlClientInterface
 
     /**
      * {@inheritdoc}
+     *
+     * @return PromiseInterface<TransactionInterface>
      */
     public function beginTransaction(?IsolationLevelInterface $isolationLevel = null): PromiseInterface
     {
-        $pool       = $this->getPool();
+        $pool = $this->getPool();
         $connection = null;
 
         return $this->withCancellation(
@@ -326,7 +339,7 @@ final class MysqlClient implements SqlClientInterface
 
                     $promise = $isolationLevel !== null
                         ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
-                        ->then(fn() => $conn->query('START TRANSACTION'))
+                            ->then(fn () => $conn->query('START TRANSACTION'))
                         : $conn->query('START TRANSACTION');
 
                     return $promise->then(function () use ($conn, $pool) {
@@ -346,6 +359,11 @@ final class MysqlClient implements SqlClientInterface
     /**
      * {@inheritdoc}
      *
+     * @param callable(TransactionInterface): mixed $callback
+     * @param int $attempts Number of retry attempts (default: 1)
+     * @return PromiseInterface<mixed>
+     *
+     * @throws \InvalidArgumentException If attempts is less than 1
      * @throws \Throwable The final exception if all attempts fail
      */
     public function transaction(
@@ -367,7 +385,7 @@ final class MysqlClient implements SqlClientInterface
                     /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn() => $callback($tx)));
+                    $result = await(async(fn () => $callback($tx)));
 
                     await($tx->commit());
 
@@ -378,7 +396,7 @@ final class MysqlClient implements SqlClientInterface
                     if ($tx !== null && $tx->isActive()) {
                         try {
                             await($tx->rollback());
-                        } catch (\Throwable $rollbackError) {
+                        } catch (\Throwable) {
                             // Continue to retry logic
                         }
                     }
@@ -396,6 +414,7 @@ final class MysqlClient implements SqlClientInterface
     /**
      * {@inheritdoc}
      *
+     * @return PromiseInterface<bool>
      * @throws NotInitializedException If this instance is not initialized
      */
     public function healthCheck(): PromiseInterface
@@ -406,8 +425,8 @@ final class MysqlClient implements SqlClientInterface
     /**
      * {@inheritdoc}
      *
-     * @throws NotInitializedException If this instance is not initialized
      * @return array<string, bool|int>
+     * @throws NotInitializedException If this instance is not initialized
      */
     public function getStats(): array
     {
@@ -415,6 +434,7 @@ final class MysqlClient implements SqlClientInterface
 
         /** @var array<string, bool|int> $clientStats */
         $clientStats = [];
+
         foreach ($stats as $key => $val) {
             if (\is_bool($val) || \is_int($val)) {
                 $clientStats[$key] = $val;
@@ -422,39 +442,35 @@ final class MysqlClient implements SqlClientInterface
         }
 
         $clientStats['statement_cache_enabled'] = $this->enableStatementCache;
-        $clientStats['statement_cache_size']     = $this->statementCacheSize;
+        $clientStats['statement_cache_size'] = $this->statementCacheSize;
 
         return $clientStats;
     }
 
     /**
-     * {@inheritdoc}
+     * Clears the prepared statement cache for all connections.
      */
     public function clearStatementCache(): void
     {
         if ($this->statementCaches !== null) {
             /** @var \WeakMap<Connection, ArrayCache> $map */
-            $map                   = new \WeakMap();
+            $map = new \WeakMap();
             $this->statementCaches = $map;
         }
     }
 
     /**
-     * {@inheritdoc}
+     * Closes the client, releasing all pooled connections and resources.
      */
     public function close(): void
     {
-        if (! $this->isInitialized) {
+        if ($this->pool === null) {
             return;
         }
 
-        if ($this->pool !== null) {
-            $this->pool->close();
-            $this->pool = null;
-        }
-
+        $this->pool->close();
+        $this->pool = null;
         $this->statementCaches = null;
-        $this->isInitialized   = false;
     }
 
     /**
@@ -490,7 +506,7 @@ final class MysqlClient implements SqlClientInterface
     }
 
     /**
-     * Gets a prepared statement from cache or creates and caches a new one.
+     * Gets a prepared statement from cache or prepares and caches a new one.
      *
      * @param Connection $conn
      * @param string $sql
@@ -499,6 +515,7 @@ final class MysqlClient implements SqlClientInterface
     private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
     {
         $caches = $this->statementCaches;
+
         if ($caches === null) {
             return $conn->prepare($sql);
         }
@@ -507,6 +524,7 @@ final class MysqlClient implements SqlClientInterface
             $caches->offsetSet($conn, new ArrayCache($this->statementCacheSize));
         }
 
+        /** @var ArrayCache $cache */
         $cache = $caches->offsetGet($conn);
 
         /** @var PromiseInterface<mixed> $cachePromise */
@@ -531,12 +549,11 @@ final class MysqlClient implements SqlClientInterface
      * Gets the connection pool instance.
      *
      * @return PoolManager
-     *
-     * @throws NotInitializedException If this instance is not initialized
+     * @throws NotInitializedException If the client has not been initialized or has been closed
      */
     private function getPool(): PoolManager
     {
-        if (! $this->isInitialized || $this->pool === null) {
+        if ($this->pool === null) {
             throw new NotInitializedException(
                 'MysqlClient instance has not been initialized or has been closed.'
             );

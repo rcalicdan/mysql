@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Interfaces;
 
 use Hibla\Mysql\ValueObjects\StreamStats;
-use IteratorAggregate;
+use Hibla\Sql\RowStream;
 
 /**
- * Represents a streaming MySQL result set.
+ * Provides an asynchronous stream of rows with access to MySQL-specific StreamStats.
  *
- * @extends IteratorAggregate<int, array<string, mixed>>
+ * This interface should be used when stream metadata is required.
  */
-interface MysqlRowStream extends IteratorAggregate
+interface MysqlRowStream extends RowStream
 {
     /**
      * Returns statistics about the completed stream, or null if still in progress.

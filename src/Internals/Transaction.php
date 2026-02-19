@@ -40,7 +40,8 @@ class Transaction implements TransactionInterface
     public function __construct(
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {}
+    ) {
+    }
 
     /**
      * {@inheritdoc}
@@ -103,7 +104,7 @@ class Transaction implements TransactionInterface
                     return $stmt->executeStream(array_values($params), $bufferSize)
                         ->then(function (MysqlRowStream $stream) use ($stmt): MysqlRowStream {
                             if ($stream instanceof RowStream) {
-        
+
                                 $stream->waitForCommand()->finally($stmt->close(...));
                             }
 
@@ -277,7 +278,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
@@ -301,7 +303,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
@@ -325,7 +328,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to release savepoint '{$identifier}': " . $e->getMessage(),
@@ -385,9 +389,9 @@ class Transaction implements TransactionInterface
             return;
         }
 
-        $this->onCommitCallbacks   = [];
+        $this->onCommitCallbacks = [];
         $this->onRollbackCallbacks = [];
-        $this->released            = true;
+        $this->released = true;
         $this->pool->release($this->connection);
     }
 

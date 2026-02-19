@@ -24,7 +24,7 @@ class RowStream implements MysqlRowStream
     /**
      * Default maximum number of rows to buffer before applying backpressure.
      */
-    private const DEFAULT_BUFFER_SIZE = 100;
+    private const int DEFAULT_BUFFER_SIZE = 100;
 
     /**
      * @var SplQueue<array<string, mixed>>
@@ -41,11 +41,13 @@ class RowStream implements MysqlRowStream
      */
     private Promise $commandPromise;
 
-    /**
-     * The underlying command promise, held so cancel() can propagate
-     * a KILL QUERY after the outer streamQuery promise has already resolved.
-     */
+    /** @var PromiseInterface<mixed>|null */
     private ?PromiseInterface $commandQueuePromise = null;
+
+    /**
+     * @var \Closure(bool): void|null
+     */
+    private ?\Closure $onBackpressure = null;
 
     private ?StreamStats $stats = null;
 
@@ -55,21 +57,8 @@ class RowStream implements MysqlRowStream
 
     private bool $cancelled = false;
 
-    /**
-     * Callback for backpressure control (pause/resume socket reading).
-     *
-     * @var \Closure(bool): void|null
-     */
-    private ?\Closure $onBackpressure = null;
-
-    /**
-     * Maximum number of rows to buffer before pausing socket reading.
-     */
     private int $maxBufferSize;
 
-    /**
-     * Threshold at which to resume socket reading (typically half of max).
-     */
     private int $resumeThreshold;
 
     /**
@@ -81,15 +70,15 @@ class RowStream implements MysqlRowStream
             throw new \InvalidArgumentException('Buffer size must be at least 1');
         }
 
-        $this->maxBufferSize   = $bufferSize;
+        $this->maxBufferSize = $bufferSize;
         $this->resumeThreshold = (int) ($bufferSize / 2);
 
         /** @var SplQueue<array<string, mixed>> $buffer */
-        $buffer       = new SplQueue();
+        $buffer = new SplQueue();
         $this->buffer = $buffer;
 
         /** @var Promise<void> $commandPromise */
-        $commandPromise       = new Promise();
+        $commandPromise = new Promise();
         $this->commandPromise = $commandPromise;
     }
 
@@ -121,7 +110,7 @@ class RowStream implements MysqlRowStream
             }
 
             /** @var Promise<array<string, mixed>|null> $waiter */
-            $waiter       = new Promise();
+            $waiter = new Promise();
             $this->waiter = $waiter;
 
             /** @var array<string, mixed>|null $row */
@@ -179,7 +168,7 @@ class RowStream implements MysqlRowStream
             }
 
             if ($this->waiter !== null) {
-                $waiter       = $this->waiter;
+                $waiter = $this->waiter;
                 $this->waiter = null;
                 $waiter->reject($this->error);
             }
@@ -206,7 +195,7 @@ class RowStream implements MysqlRowStream
      * the outer streamQuery promise has already fulfilled.
      *
      * Called by Connection::streamQuery() immediately after enqueueCommand().
-     *
+     * @param PromiseInterface<mixed> $promise
      * @internal
      */
     public function setCommandPromise(PromiseInterface $promise): void
@@ -238,7 +227,7 @@ class RowStream implements MysqlRowStream
         }
 
         if ($this->waiter !== null) {
-            $promise      = $this->waiter;
+            $promise = $this->waiter;
             $this->waiter = null;
             $promise->resolve($row);
         } else {
@@ -262,11 +251,11 @@ class RowStream implements MysqlRowStream
             return;
         }
 
-        $this->stats     = $stats;
+        $this->stats = $stats;
         $this->completed = true;
 
         if ($this->waiter !== null) {
-            $promise      = $this->waiter;
+            $promise = $this->waiter;
             $this->waiter = null;
             $promise->resolve(null);
         }
@@ -283,11 +272,11 @@ class RowStream implements MysqlRowStream
             return;
         }
 
-        $this->error     = $e;
+        $this->error = $e;
         $this->completed = true;
 
         if ($this->waiter !== null) {
-            $promise      = $this->waiter;
+            $promise = $this->waiter;
             $this->waiter = null;
             $promise->reject($e);
         }

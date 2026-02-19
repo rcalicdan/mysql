@@ -119,13 +119,13 @@ class PoolManager
             throw new InvalidArgumentException('Max lifetime must be greater than 0');
         }
 
-        $this->configValidated    = true;
-        $this->maxSize            = $maxSize;
-        $this->connector          = $connector;
-        $this->idleTimeoutNanos   = $idleTimeout * 1_000_000_000;
-        $this->maxLifetimeNanos   = $maxLifetime * 1_000_000_000;
-        $this->pool               = new SplQueue();
-        $this->waiters            = new SplQueue();
+        $this->configValidated = true;
+        $this->maxSize = $maxSize;
+        $this->connector = $connector;
+        $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
+        $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
+        $this->pool = new SplQueue();
+        $this->waiters = new SplQueue();
     }
 
     /**
@@ -151,23 +151,26 @@ class PoolManager
             /** @var MysqlConnection $connection */
             $connection = $this->pool->dequeue();
 
-            $connId    = spl_object_id($connection);
-            $now       = (int) hrtime(true);
-            $lastUsed  = $this->connectionLastUsed[$connId] ?? 0;
+            $connId = spl_object_id($connection);
+            $now = (int) hrtime(true);
+            $lastUsed = $this->connectionLastUsed[$connId] ?? 0;
             $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
 
             if (($now - $lastUsed) > $this->idleTimeoutNanos) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
             if (($now - $createdAt) > $this->maxLifetimeNanos) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
             if (! $connection->isReady() || $connection->isClosed()) {
                 $this->removeConnection($connection);
+
                 continue;
             }
 
@@ -205,12 +208,14 @@ class PoolManager
         if ($connection->isClosed() || ! $connection->isReady()) {
             $this->removeConnection($connection);
             $this->satisfyNextWaiter();
+
             return;
         }
 
         // Absorb stale kill flag before the connection can be reused.
         if ($connection->wasQueryCancelled()) {
             $this->drainAndRelease($connection);
+
             return;
         }
 
@@ -218,17 +223,19 @@ class PoolManager
     }
 
     /**
-     * {@inheritdoc}
+     * Retrieves statistics about the current state of the connection pool.
+     *
+     * @return array<string, mixed> An associative array with pool metrics.
      */
     public function getStats(): array
     {
         return [
-            'active_connections'  => $this->activeConnections,
-            'pooled_connections'  => $this->pool->count(),
-            'waiting_requests'    => $this->waiters->count(),
-            'draining_connections'=> \count($this->drainingConnections),
-            'max_size'            => $this->maxSize,
-            'config_validated'    => $this->configValidated,
+            'active_connections' => $this->activeConnections,
+            'pooled_connections' => $this->pool->count(),
+            'waiting_requests' => $this->waiters->count(),
+            'draining_connections' => \count($this->drainingConnections),
+            'max_size' => $this->maxSize,
+            'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
         ];
     }
@@ -263,12 +270,12 @@ class PoolManager
             }
         }
 
-        $this->pool                 = new SplQueue();
-        $this->waiters              = new SplQueue();
-        $this->activeConnections    = 0;
-        $this->connectionLastUsed   = [];
-        $this->connectionCreatedAt  = [];
-        $this->isClosing            = false;
+        $this->pool = new SplQueue();
+        $this->waiters = new SplQueue();
+        $this->activeConnections = 0;
+        $this->connectionLastUsed = [];
+        $this->connectionCreatedAt = [];
+        $this->isClosing = false;
     }
 
     /**
@@ -283,8 +290,8 @@ class PoolManager
 
         $stats = [
             'total_checked' => 0,
-            'healthy'       => 0,
-            'unhealthy'     => 0,
+            'healthy' => 0,
+            'unhealthy' => 0,
         ];
 
         /** @var SplQueue<MysqlConnection> $tempQueue */
@@ -356,6 +363,7 @@ class PoolManager
     {
         if ($this->isClosing) {
             $this->removeConnection($connection);
+
             return;
         }
 
@@ -369,6 +377,7 @@ class PoolManager
 
                     if ($this->isClosing) {
                         $this->removeConnection($connection);
+
                         return;
                     }
 
@@ -382,6 +391,7 @@ class PoolManager
 
                     if ($this->isClosing) {
                         $this->removeConnection($connection);
+
                         return;
                     }
 
@@ -391,6 +401,7 @@ class PoolManager
                     if ($connection->isClosed() || ! $connection->isReady()) {
                         $this->removeConnection($connection);
                         $this->satisfyNextWaiter();
+
                         return;
                     }
 
@@ -414,18 +425,20 @@ class PoolManager
         if ($waiter !== null) {
             $connection->resume();
             $waiter->resolve($connection);
+
             return;
         }
 
         // No waiters — park in idle pool.
         $connection->pause();
 
-        $connId    = spl_object_id($connection);
-        $now       = (int) hrtime(true);
+        $connId = spl_object_id($connection);
+        $now = (int) hrtime(true);
         $createdAt = $this->connectionCreatedAt[$connId] ?? 0;
 
         if (($now - $createdAt) > $this->maxLifetimeNanos) {
             $this->removeConnection($connection);
+
             return;
         }
 
@@ -483,6 +496,7 @@ class PoolManager
 
                     if ($waiter->isCancelled()) {
                         $this->releaseClean($connection);
+
                         return;
                     }
 

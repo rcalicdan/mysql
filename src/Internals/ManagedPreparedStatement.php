@@ -86,7 +86,6 @@ class ManagedPreparedStatement implements PreparedStatementInterface
         ;
     }
 
-
     /**
      * Bridges cancel() → cancelChain() on a public-facing promise.
      *
