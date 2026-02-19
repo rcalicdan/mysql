@@ -480,6 +480,12 @@ class PoolManager
                 function (MysqlConnection $connection) use ($waiter): void {
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
+
+                    if ($waiter->isCancelled()) {
+                        $this->releaseClean($connection);
+                        return;
+                    }
+
                     $waiter->resolve($connection);
                 },
                 function (Throwable $e) use ($waiter): void {

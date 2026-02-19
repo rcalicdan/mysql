@@ -262,23 +262,24 @@ final class MysqlClient implements SqlClientInterface
 
         return $this->withCancellation(
             $pool->get()
-                ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, &$connection, &$released, $releaseOnce) {
+                ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, &$connection, &$released) {
                     $connection = $conn;
 
                     if (\count($params) === 0) {
-                        $streamPromise = $conn->streamQuery($sql, $bufferSize);
+                        $innerStreamPromise = $conn->streamQuery($sql, $bufferSize);
                     } else {
-                        $streamPromise = $this->getCachedStatement($conn, $sql)
+                        $innerStreamPromise = $this->getCachedStatement($conn, $sql)
                             ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
                                 return $stmt->executeStream(array_values($params), $bufferSize);
                             });
                     }
 
-                    return $streamPromise->then(
+                    $q = $innerStreamPromise->then(
                         function (MysqlRowStream $stream) use ($conn, $pool, &$released): MysqlRowStream {
                             if ($stream instanceof Internals\RowStream) {
-                                $stream->waitForCommand()->finally(function () use ($pool, $conn, &$released): void {
-                                    $released = true;
+                                $released = true;
+
+                                $stream->waitForCommand()->finally(function () use ($pool, $conn): void {
                                     $pool->release($conn);
                                 });
                             } else {
@@ -289,12 +290,22 @@ final class MysqlClient implements SqlClientInterface
                             return $stream;
                         },
                         function (\Throwable $e) use ($conn, $pool, &$released): never {
-                            $released = true;
-                            $pool->release($conn);
+                            if (! $released) {
+                                $released = true;
+                                $pool->release($conn);
+                            }
 
                             throw $e;
                         }
                     );
+
+                    $q->onCancel(static function () use ($innerStreamPromise): void {
+                        if (! $innerStreamPromise->isSettled()) {
+                            $innerStreamPromise->cancelChain();
+                        }
+                    });
+
+                    return $q;
                 })
                 ->finally($releaseOnce)
         );

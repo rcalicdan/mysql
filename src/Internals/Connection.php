@@ -321,6 +321,12 @@ class Connection
             return;
         }
 
+        // Fail-safe: If closing a busy connection, ensure it kill the query on the server.
+        // This prevents server-side "zombie" queries holding locks when the client disconnects abruptly.
+        if (($this->state === ConnectionState::QUERYING || $this->state === ConnectionState::EXECUTING) && $this->threadId > 0) {
+            $this->dispatchKillQuery($this->threadId);
+        }
+
         $this->isUserClosing = true;
         $this->state = ConnectionState::CLOSED;
 
@@ -445,6 +451,15 @@ class Connection
         int $stmtId = 0,
         mixed $context = null
     ): PromiseInterface {
+        // Prevent queuing commands on closed connections to ensure clean shutdown.
+        if ($this->state === ConnectionState::CLOSED) {
+            if ($type === CommandRequest::TYPE_CLOSE_STMT) {
+                // Silently resolve close_stmt calls from destructors to avoid errors during shutdown.
+                return Promise::resolved(null);
+            }
+            return Promise::rejected(new ConnectionException('Connection is closed'));
+        }
+
         $promise = new Promise();
         $command = new CommandRequest($type, $promise, $sql, $params, $stmtId, $context);
         $this->commandQueue->enqueue($command);
