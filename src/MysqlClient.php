@@ -152,7 +152,7 @@ final class MysqlClient implements SqlClientInterface
                     if ($this->enableStatementCache) {
                         return $this->getCachedStatement($conn, $sql)
                             ->then(function (PreparedStatement $stmt) use ($params) {
-                                return $stmt->execute($params);
+                                return $stmt->execute(array_values($params));
                             })
                         ;
                     }
@@ -164,7 +164,7 @@ final class MysqlClient implements SqlClientInterface
                         ->then(function (PreparedStatement $stmt) use ($params, &$stmtRef) {
                             $stmtRef = $stmt;
 
-                            return $stmt->execute($params);
+                            return $stmt->execute(array_values($params));
                         })
                         ->finally(function () use (&$stmtRef): void {
                             if ($stmtRef !== null) {
@@ -191,7 +191,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getAffectedRows())
+                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
         );
     }
 
@@ -205,7 +205,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getLastInsertId())
+                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
         );
     }
 
@@ -219,7 +219,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->fetchOne())
+                ->then(fn(ResultInterface $result) => $result->fetchOne())
         );
     }
 
@@ -259,21 +259,24 @@ final class MysqlClient implements SqlClientInterface
     public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
     {
         $pool = $this->getPool();
-        $connection = null;
-        $released = false;
 
-        $releaseOnce = function () use ($pool, &$connection, &$released): void {
-            if ($released || $connection === null) {
+        $state = new class {
+            public ?Connection $connection = null;
+            public bool $released = false;
+        };
+
+        $releaseOnce = function () use ($pool, $state): void {
+            if ($state->released || $state->connection === null) {
                 return;
             }
-            $released = true;
-            $pool->release($connection);
+            $state->released = true;
+            $pool->release($state->connection);
         };
 
         return $this->withCancellation(
             $pool->get()
-                ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, &$connection, &$released) {
-                    $connection = $conn;
+                ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, $state) {
+                    $state->connection = $conn;
 
                     if (\count($params) === 0) {
                         $innerStreamPromise = $conn->streamQuery($sql, $bufferSize);
@@ -281,28 +284,27 @@ final class MysqlClient implements SqlClientInterface
                         $innerStreamPromise = $this->getCachedStatement($conn, $sql)
                             ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
                                 return $stmt->executeStream(array_values($params), $bufferSize);
-                            })
-                        ;
+                            });
                     }
 
                     $q = $innerStreamPromise->then(
-                        function (MysqlRowStream $stream) use ($conn, $pool, &$released): MysqlRowStream {
+                        function (MysqlRowStream $stream) use ($conn, $pool, $state): MysqlRowStream {
                             if ($stream instanceof Internals\RowStream) {
-                                $released = true;
+                                $state->released = true;
 
                                 $stream->waitForCommand()->finally(function () use ($pool, $conn): void {
                                     $pool->release($conn);
                                 });
                             } else {
-                                $released = true;
+                                $state->released = true;
                                 $pool->release($conn);
                             }
 
                             return $stream;
                         },
-                        function (\Throwable $e) use ($conn, $pool, &$released): never {
-                            if (! $released) {
-                                $released = true;
+                        function (\Throwable $e) use ($conn, $pool, $state): never {
+                            if (! $state->released) {
+                                $state->released = true;
                                 $pool->release($conn);
                             }
 
@@ -339,7 +341,7 @@ final class MysqlClient implements SqlClientInterface
 
                     $promise = $isolationLevel !== null
                         ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
-                            ->then(fn () => $conn->query('START TRANSACTION'))
+                        ->then(fn() => $conn->query('START TRANSACTION'))
                         : $conn->query('START TRANSACTION');
 
                     return $promise->then(function () use ($conn, $pool) {
@@ -385,7 +387,7 @@ final class MysqlClient implements SqlClientInterface
                     /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn () => $callback($tx)));
+                    $result = await(async(fn() => $callback($tx)));
 
                     await($tx->commit());
 
@@ -414,7 +416,7 @@ final class MysqlClient implements SqlClientInterface
     /**
      * {@inheritdoc}
      *
-     * @return PromiseInterface<bool>
+     * @return PromiseInterface<array<string, int>>  
      * @throws NotInitializedException If this instance is not initialized
      */
     public function healthCheck(): PromiseInterface
