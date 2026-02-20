@@ -29,6 +29,9 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 use SplQueue;
 use Throwable;
 
+use function Hibla\async;
+use function Hibla\await;
+
 /**
  * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
  *
@@ -548,26 +551,29 @@ class Connection
     /**
      * Opens a dedicated second connection and sends KILL QUERY <threadId>.
      * This is intentionally fire-and-forget for maximum robustness.
+     *
+     * Executes in a detached fiber (via async) to: This is intentional than to use pure Promise to prevent GC from clearing reference to the chain
+     * 1. Prevent blocking the current call stack (especially destructors or close).
+     * 2. Root the Promise chain in the Event Loop so PHP's GC doesn't destroy it
+     *    prematurely when the parent method returns.
      */
     private function dispatchKillQuery(int $threadId): void
     {
-        Connection::create($this->params)->then(
-            function (Connection $killConn) use ($threadId): void {
-                $killConn->query("KILL QUERY {$threadId}")
-                    ->then(
-                        function () use ($killConn): void {
-                            $killConn->close();
-                        },
-                        function () use ($killConn): void {
-                            $killConn->close();
-                        }
-                    )
-                ;
-            },
-            function (): void {
-                // Could not open kill connection. Query will run to completion.
+        async(function () use ($threadId): void {
+            try {
+                /** @var Connection $killConn */
+                $killConn = await(Connection::create($this->params, $this->connector));
+
+                try {
+                    await($killConn->query("KILL QUERY {$threadId}"));
+                } finally {
+                    $killConn->close();
+                }
+            } catch (Throwable $e) {
+                // Silently ignore kill connection errors. The original query will
+                // continue to completion, and the pool will eventually clean it up.
             }
-        );
+        });
     }
 
     /**

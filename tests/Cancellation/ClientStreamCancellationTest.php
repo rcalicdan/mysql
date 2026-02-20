@@ -8,23 +8,17 @@ use function Hibla\delay;
 use Hibla\EventLoop\Loop;
 use Hibla\Promise\Exceptions\CancelledException;
 
-beforeAll(function (): void {
-    $client = makeClient();
 
-    // CREATE TABLE IF NOT EXISTS + TRUNCATE avoids DROP TABLE entirely.
-    // DROP TABLE acquires an exclusive MDL that can hang if background kill
-    // connections from a previous run haven't fully closed on MySQL's side.
-    // TRUNCATE on an existing table is faster and avoids that DDL lock issue.
+function setupTable(mixed $client): void
+{
+    await($client->query('DROP TABLE IF EXISTS client_stream_test'));
     await($client->query('
-        CREATE TABLE IF NOT EXISTS client_stream_test (
+        CREATE TABLE client_stream_test (
             id    INT PRIMARY KEY AUTO_INCREMENT,
             value VARCHAR(255) NOT NULL
         ) ENGINE=InnoDB
     '));
 
-    await($client->query('TRUNCATE TABLE client_stream_test'));
-
-    // Single bulk INSERT — avoids 1000 sequential event loop ticks
     $rows = [];
     for ($i = 1; $i <= 1000; $i++) {
         $rows[] = "('row_{$i}')";
@@ -32,22 +26,19 @@ beforeAll(function (): void {
     await($client->query(
         'INSERT INTO client_stream_test (value) VALUES ' . implode(', ', $rows)
     ));
+}
 
-    $client->close();
-});
+function teardownTable(mixed $client): void
+{
+    await($client->query('DROP TABLE IF EXISTS client_stream_test'));
+}
 
-// No afterAll — DROP TABLE after Loop::stop()/reset() causes the await()
-// inside afterAll to start a new loop cycle that cannot exit cleanly.
-// The table persists between runs but is truncated and refilled by beforeAll.
 
 describe('Client Stream Cancellation', function (): void {
-
-    // =========================================================================
-    // Scenario 1: Cancel non-prepared stream (Text Protocol)
-    // =========================================================================
-
     it('cancels a non-prepared stream before the first row arrives and throws CancelledException', function (): void {
         $client = makeClient();
+        setupTable($client);
+
         $startTime = microtime(true);
 
         $streamPromise = $client->stream(
@@ -59,16 +50,17 @@ describe('Client Stream Cancellation', function (): void {
         });
 
         expect(fn () => await($streamPromise))
-            ->toThrow(CancelledException::class)
-        ;
+            ->toThrow(CancelledException::class);
 
         expect(round(microtime(true) - $startTime, 2))->toBeLessThan(5.0);
 
+        teardownTable($client);
         $client->close();
     });
 
     test('pool connection is healthy after a cancelled non-prepared stream', function (): void {
         $client = makeClient();
+        setupTable($client);
 
         $streamPromise = $client->stream(
             'SELECT value, SLEEP(10) AS delay FROM client_stream_test'
@@ -79,24 +71,21 @@ describe('Client Stream Cancellation', function (): void {
         });
 
         expect(fn () => await($streamPromise))
-            ->toThrow(CancelledException::class)
-        ;
+            ->toThrow(CancelledException::class);
 
         await(delay(0.5));
 
         $result = await($client->query('SELECT "Alive" AS status'));
-
         expect($result->fetchOne()['status'])->toBe('Alive');
 
+        teardownTable($client);
         $client->close();
     });
 
-    // =========================================================================
-    // Scenario 2: Cancel prepared stream (Binary Protocol)
-    // =========================================================================
-
     it('cancels a prepared stream before the first row arrives and throws CancelledException', function (): void {
         $client = makeClient();
+        setupTable($client);
+
         $startTime = microtime(true);
 
         $streamPromise = $client->stream(
@@ -109,16 +98,17 @@ describe('Client Stream Cancellation', function (): void {
         });
 
         expect(fn () => await($streamPromise))
-            ->toThrow(CancelledException::class)
-        ;
+            ->toThrow(CancelledException::class);
 
         expect(round(microtime(true) - $startTime, 2))->toBeLessThan(5.0);
 
+        teardownTable($client);
         $client->close();
     });
 
     test('pool connection is healthy after a cancelled prepared stream', function (): void {
         $client = makeClient();
+        setupTable($client);
 
         $streamPromise = $client->stream(
             'SELECT value, SLEEP(?) AS delay FROM client_stream_test',
@@ -130,33 +120,27 @@ describe('Client Stream Cancellation', function (): void {
         });
 
         expect(fn () => await($streamPromise))
-            ->toThrow(CancelledException::class)
-        ;
+            ->toThrow(CancelledException::class);
 
         await(delay(0.5));
 
         $result = await($client->query('SELECT ? AS echo_val', ['StreamOk']));
-
         expect($result->fetchOne()['echo_val'])->toBe('StreamOk');
 
+        teardownTable($client);
         $client->close();
     });
 
-    // =========================================================================
-    // Scenario 3: Cancel stream mid-iteration (Phase 2)
-    // =========================================================================
-
     it('cancels a stream mid-iteration after the first row and throws CancelledException', function (): void {
         $client = makeClient();
+        setupTable($client);
 
-        $stream = await($client->stream('SELECT value FROM client_stream_test'));
-
+        $stream   = await($client->stream('SELECT value FROM client_stream_test'));
         $rowsRead = 0;
 
         expect(function () use ($stream, &$rowsRead): void {
             foreach ($stream as $row) {
                 $rowsRead++;
-
                 if ($rowsRead === 1) {
                     $stream->cancel();
                 }
@@ -165,11 +149,13 @@ describe('Client Stream Cancellation', function (): void {
 
         expect($rowsRead)->toBe(1);
 
+        teardownTable($client);
         $client->close();
     });
 
     test('pool connection is healthy after a mid-iteration stream cancellation', function (): void {
         $client = makeClient();
+        setupTable($client);
 
         $stream = await($client->stream('SELECT value FROM client_stream_test'));
 
@@ -184,22 +170,19 @@ describe('Client Stream Cancellation', function (): void {
         await(delay(0.5));
 
         $result = await($client->query('SELECT COUNT(*) AS count FROM client_stream_test'));
-
         expect((int) $result->fetchOne()['count'])->toBe(1000);
 
+        teardownTable($client);
         $client->close();
     });
 
-    // =========================================================================
-    // Scenario 4: Cancel an already-completed stream (safe no-op)
-    // =========================================================================
-
     test('cancelling an already-completed stream is a safe no-op', function (): void {
         $client = makeClient();
+        setupTable($client);
 
-        $stream = await($client->stream('SELECT value FROM client_stream_test'));
-
+        $stream   = await($client->stream('SELECT value FROM client_stream_test'));
         $rowsRead = 0;
+
         foreach ($stream as $row) {
             $rowsRead++;
         }
@@ -208,33 +191,32 @@ describe('Client Stream Cancellation', function (): void {
 
         expect($rowsRead)->toBe(1000);
 
+        teardownTable($client);
         $client->close();
     });
 
     test('pool connection is healthy after cancelling an already-completed stream', function (): void {
         $client = makeClient();
+        setupTable($client);
 
         $stream = await($client->stream('SELECT value FROM client_stream_test'));
 
         foreach ($stream as $row) {
-            // consume all rows
+            // consume all
         }
 
         $stream->cancel();
 
         $result = await($client->query('SELECT "StillAlive" AS status'));
-
         expect($result->fetchOne()['status'])->toBe('StillAlive');
 
+        teardownTable($client);
         $client->close();
     });
 
-    // =========================================================================
-    // Scenario 5: Cancel multiple concurrent streams
-    // =========================================================================
-
     it('cancels multiple concurrent streams and all throw CancelledException', function (): void {
         $client = makeClient(maxConnections: 5);
+        setupTable($client);
 
         $streamPromises = [];
         for ($i = 0; $i < 5; $i++) {
@@ -260,11 +242,13 @@ describe('Client Stream Cancellation', function (): void {
 
         expect($cancelled)->toBe(5);
 
+        teardownTable($client);
         $client->close();
     });
 
     test('pool is fully functional after mass concurrent stream cancellation', function (): void {
         $client = makeClient(maxConnections: 5);
+        setupTable($client);
 
         $streamPromises = [];
         for ($i = 0; $i < 5; $i++) {
@@ -287,17 +271,14 @@ describe('Client Stream Cancellation', function (): void {
             }
         }
 
-        // Longer drain window — 5 concurrent kill connections each need a full
-        // TCP handshake + auth + KILL QUERY + close cycle before MySQL fully
-        // releases those threads. 5s gives enough headroom for all of them.
         await(delay(5.0));
 
         $result = await($client->query('SELECT "PoolRecovered" AS status'));
 
         expect($result->fetchOne()['status'])->toBe('PoolRecovered')
-            ->and($client->getStats()['draining_connections'])->toBe(0)
-        ;
+            ->and($client->getStats()['draining_connections'])->toBe(0);
 
+        teardownTable($client);
         $client->close();
     });
 });
