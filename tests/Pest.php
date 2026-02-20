@@ -151,3 +151,33 @@ function makeConcurrentClient(int $maxConnections = 10): MysqlClient
         3600
     );
 }
+
+function twentyRowSql(): string
+{
+    return '
+            SELECT n
+            FROM (
+                SELECT (a.N + b.N * 10 + 1) AS n
+                FROM
+                    (SELECT 0 AS N UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4
+                     UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) a,
+                    (SELECT 0 AS N UNION SELECT 1) b
+            ) numbers
+            ORDER BY n
+        ';
+}
+
+function twentyRowPreparedSql(): string
+{
+    return '
+            SELECT n
+            FROM (
+                SELECT (a.N + b.N * 10 + 1) AS n
+                FROM
+                    (SELECT 0 AS N UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4
+                     UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) a,
+                    (SELECT 0 AS N UNION SELECT 1) b
+            ) numbers
+            ORDER BY n
+        ';
+}

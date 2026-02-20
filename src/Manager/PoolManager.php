@@ -217,7 +217,7 @@ class PoolManager
      */
     public function release(MysqlConnection $connection): void
     {
-        if ($connection->isClosed() || ! $connection->isReady()) {
+        if ($connection->isClosed()) {
             $this->removeConnection($connection);
             $this->satisfyNextWaiter();
 
@@ -227,6 +227,19 @@ class PoolManager
         // Absorb stale kill flag before the connection can be reused.
         if ($connection->wasQueryCancelled()) {
             $this->drainAndRelease($connection);
+
+            return;
+        }
+
+        // If the connection is not in a READY state (e.g., still QUERYING) and
+        // was not explicitly cancelled, it means it was released in a dirty or 
+        // corrupted state (such as an unconsumed stream or a protocol desync).
+        // It cannot safely park in the idle pool because the next borrower 
+        // would receive a broken connection. Instead, it should be destroy completely
+        // and check if the pool need to spin up a fresh replacement for a queued waiter.
+        if (! $connection->isReady()) {
+            $this->removeConnection($connection);
+            $this->satisfyNextWaiter();
 
             return;
         }
@@ -339,8 +352,7 @@ class PoolManager
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                )
-            ;
+                );
         }
 
         Promise::all($checkPromises)
@@ -362,10 +374,6 @@ class PoolManager
 
         return $promise;
     }
-
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
 
     /**
      * Absorbs a stale KILL flag by issuing `DO SLEEP(0)` on the connection,
@@ -597,7 +605,7 @@ class PoolManager
             $this->connectionLastUsed[$connId],
             $this->connectionCreatedAt[$connId],
             $this->drainingConnections[$connId],
-            $this->activeConnectionsMap[$connId] 
+            $this->activeConnectionsMap[$connId]
         );
 
         $this->activeConnections--;
