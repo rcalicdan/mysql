@@ -9,11 +9,6 @@ use Hibla\EventLoop\Loop;
 use Hibla\Promise\Exceptions\CancelledException;
 
 describe('Client Query Cancellation', function (): void {
-
-    // =========================================================================
-    // Scenario 1: Cancel non-prepared query (Text Protocol)
-    // =========================================================================
-
     it('cancels a non-prepared query via the client and throws CancelledException', function (): void {
         $client = makeClient();
         $startTime = microtime(true);
@@ -52,10 +47,6 @@ describe('Client Query Cancellation', function (): void {
 
         $client->close();
     });
-
-    // =========================================================================
-    // Scenario 2: Cancel prepared query (Binary Protocol)
-    // =========================================================================
 
     it('cancels a prepared query via the client and throws CancelledException', function (): void {
         $client = makeClient();
@@ -98,15 +89,6 @@ describe('Client Query Cancellation', function (): void {
 });
 
 describe('Client Waiter Cancellation', function (): void {
-
-    // =========================================================================
-    // Scenario 3: Cancel while waiting for a pool connection (pre-server)
-    // =========================================================================
-    // The pool is fully saturated so the query never reaches the server.
-    // Cancelling the waiter promise should not dispatch KILL QUERY and should
-    // not affect pool accounting.
-    // =========================================================================
-
     it('cancels a queued waiter before it reaches the server and throws CancelledException', function (): void {
         $client = makeClient(maxConnections: 5);
 

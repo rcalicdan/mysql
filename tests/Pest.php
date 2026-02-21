@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use function Hibla\await;
 
-use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\MysqlClient;
@@ -13,8 +12,6 @@ use Hibla\Mysql\ValueObjects\ConnectionParams;
 
 uses()
     ->afterEach(function () {
-        Loop::stop();
-        Loop::reset();
         Mockery::close();
     })
     ->in(__DIR__)
