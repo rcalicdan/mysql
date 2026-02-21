@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Internals;
 
+use function Hibla\async;
+use function Hibla\await;
+
 use Hibla\Mysql\Enums\ConnectionState;
 use Hibla\Mysql\Handlers\ExecuteHandler;
 use Hibla\Mysql\Handlers\HandshakeHandler;
@@ -26,11 +29,9 @@ use LogicException;
 use Rcalicdan\MySQLBinaryProtocol\Factory\DefaultPacketReaderFactory;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
+
 use SplQueue;
 use Throwable;
-
-use function Hibla\async;
-use function Hibla\await;
 
 /**
  * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
@@ -50,6 +51,13 @@ use function Hibla\await;
  */
 class Connection
 {
+    /**
+     * How long (seconds) to wait for a KILL QUERY to settle before giving up
+     * and proceeding with teardown anyway. Bounds the worst-case shutdown time
+     * when the kill side-channel is slow or unreachable.
+     */
+    private const KILL_TIMEOUT_SECONDS = 3.0;
+
     /**
      * @var SplQueue<CommandRequest>
      */
@@ -99,6 +107,26 @@ class Connection
      * KILL flag that MySQL sets when KILL QUERY arrives after the query finishes.
      */
     private bool $wasQueryCancelled = false;
+
+    /**
+     * Tracks in-flight KILL QUERY promises keyed by thread ID.
+     *
+     * Keying by thread ID is intentional: MySQL has exactly one running query
+     * per thread at any moment, so a second KILL for the same thread ID before
+     * the first resolves is redundant. The idempotency guard in
+     * dispatchKillQuery() prevents the second call from overwriting the first
+     * promise and orphaning it.
+     *
+     * Each promise is created and registered SYNCHRONOUSLY inside
+     * dispatchKillQuery() before async() schedules the fiber, so close() always
+     * sees a non-empty map regardless of when it runs relative to the fiber.
+     *
+     * Entries are removed inside the fiber's finally block once the kill
+     * promise settles, keeping the map lean across the connection lifetime.
+     *
+     * @var array<int, Promise<mixed>>
+     */
+    private array $pendingKills = [];
 
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
@@ -316,6 +344,23 @@ class Connection
 
     /**
      * Closes the connection and releases resources.
+     *
+     * If KILL QUERY packets are in-flight (dispatched either by a prior
+     * cancellation or by the busy-connection guard below), teardown is
+     * deferred until every pending kill settles. This closes the race where
+     * the socket would otherwise be destroyed while the kill fiber is still
+     * mid-connect, leaving the server-side query holding row/table locks with
+     * no client left to receive the eventual ERR packet.
+     *
+     * The snapshot of $pendingKills taken here is stable: state is set to
+     * CLOSED before the snapshot, so no new kills can be dispatched after
+     * this point — handleCommandCancellation() guards with !isClosed(), and
+     * the busy-connection dispatch above only fires before the state flag is
+     * set. The two code paths are therefore mutually exclusive at snapshot time.
+     *
+     * Teardown is always guaranteed to run: each pending kill is wrapped in a
+     * KILL_TIMEOUT_SECONDS hard timeout, so a slow or unreachable kill
+     * side-channel can never block shutdown indefinitely.
      */
     public function close(): void
     {
@@ -323,11 +368,17 @@ class Connection
             return;
         }
 
-        // Fail-safe: If closing a busy connection, ensure it kill the query on the server.
-        // This prevents server-side "zombie" queries holding locks when the client disconnects abruptly.
+        // Fail-safe: if closing a busy connection, ensure the query is killed
+        // on the server. This prevents server-side "zombie" queries holding
+        // locks when the client disconnects abruptly.
+        //
+        // dispatchKillQuery() is a no-op if a kill is already in-flight for
+        // this thread ID (e.g. from a prior cancellation), so there is no
+        // double-send and no risk of overwriting an existing pendingKills entry.
         if (
             ($this->state === ConnectionState::QUERYING || $this->state === ConnectionState::EXECUTING)
             && $this->threadId > 0
+            && $this->params->enableServerSideCancellation  
         ) {
             $this->dispatchKillQuery($this->threadId);
         }
@@ -335,44 +386,24 @@ class Connection
         $this->isUserClosing = true;
         $this->state = ConnectionState::CLOSED;
 
-        if ($this->socket !== null) {
-            $this->socket->close();
-            $this->socket = null;
-        }
-
-        $this->packetReader = null;
-        $this->handshakeHandler = null;
-        $this->queryHandler = null;
-        $this->prepareHandler = null;
-        $this->executeHandler = null;
-        $this->pingHandler = null;
-
-        if ($this->connectPromise !== null) {
-            $this->connectPromise->reject(
-                new ConnectionException('Connection closed before establishing')
+        // Snapshot pendingKills AFTER state is set to CLOSED and AFTER the
+        // conditional dispatch above. At this point no new kills can be added:
+        //   - handleCommandCancellation() guards with !isClosed()
+        //   - close() itself only dispatches in the block above
+        // The snapshot is therefore complete and stable.
+        //
+        // Both branches of the then() call teardown() so that a rejected or
+        // timed-out kill never silently skips cleanup.
+        if ($this->pendingKills !== []) {
+            $this->awaitPendingKills()->then(
+                fn() => $this->teardown(),
+                fn() => $this->teardown()
             );
-            $this->connectPromise = null;
+
+            return;
         }
 
-        if ($this->currentCommand !== null) {
-            $this->currentCommand->promise->reject(
-                new ConnectionException('Connection closed during command execution')
-            );
-            $this->currentCommand = null;
-        }
-
-        while (! $this->commandQueue->isEmpty()) {
-            /** @var CommandRequest $cmd */
-            $cmd = $this->commandQueue->dequeue();
-
-            if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
-                $cmd->promise->resolve(null);
-            } else {
-                $cmd->promise->reject(
-                    new ConnectionException('Connection closed before command could execute')
-                );
-            }
-        }
+        $this->teardown();
     }
 
     public function __destruct()
@@ -509,7 +540,11 @@ class Connection
                 CommandRequest::TYPE_EXECUTE_STREAM,
             ], true);
 
-            if ($isKillable && $this->threadId > 0 && ! $this->isClosed()) {
+            // Respect the per-connection cancellation policy set by the pool.
+            // When disabled, promise cancellation only changes the promise state —
+            // the server-side query runs to completion and the connection is
+            // returned to the pool normally without a stale kill flag to absorb.
+            if ($isKillable && $this->params->enableServerSideCancellation && $this->threadId > 0 && ! $this->isClosed()) {
                 $this->wasQueryCancelled = true;
                 $this->dispatchKillQuery($this->threadId);
             }
@@ -549,31 +584,166 @@ class Connection
     }
 
     /**
-     * Opens a dedicated second connection and sends KILL QUERY <threadId>.
-     * This is intentionally fire-and-forget for maximum robustness.
+     * Opens a dedicated side-channel connection and sends KILL QUERY <threadId>.
      *
-     * Executes in a detached fiber (via async) to: This is intentional than to use pure Promise to prevent GC from clearing reference to the chain
-     * 1. Prevent blocking the current call stack (especially destructors or close).
-     * 2. Root the Promise chain in the Event Loop so PHP's GC doesn't destroy it
-     *    prematurely when the parent method returns.
+     * Key design properties:
+     *
+     *   1. IDEMPOTENT — if a kill is already in-flight for this thread ID the
+     *      method is a no-op. This prevents the double-dispatch race where both
+     *      handleCommandCancellation() and close() independently detect a live
+     *      query and call dispatchKillQuery() for the same thread, with the
+     *      second call overwriting pendingKills[$threadId] and orphaning the
+     *      first promise.
+     *
+     *   2. SYNCHRONOUS REGISTRATION — $killPromise is created and stored in
+     *      $pendingKills BEFORE async() schedules the fiber. This closes the
+     *      tick-boundary race where close() runs in the same tick as
+     *      dispatchKillQuery() but before the fiber has executed, making
+     *      pendingKills appear empty to close().
+     *
+     *   3. BOUNDED — the kill work is wrapped in KILL_TIMEOUT_SECONDS so a
+     *      slow or unreachable side-channel never blocks teardown forever.
+     *
+     *   4. SAFE AFTER TEARDOWN — the fiber captures only $this->params and
+     *      $this->connector, both of which are readonly and never nulled by
+     *      teardown(). The fiber therefore remains safe to execute even if
+     *      teardown() has already run on the parent connection.
      */
     private function dispatchKillQuery(int $threadId): void
     {
-        async(function () use ($threadId): void {
-            try {
-                /** @var Connection $killConn */
-                $killConn = await(Connection::create($this->params, $this->connector));
+        // Idempotency guard — a kill is already in-flight for this thread.
+        // Sending a second one is redundant and would orphan the first promise,
+        // causing awaitPendingKills() to never see it resolve.
+        if (isset($this->pendingKills[$threadId])) {
+            return;
+        }
 
-                try {
-                    await($killConn->query("KILL QUERY {$threadId}"));
-                } finally {
-                    $killConn->close();
-                }
-            } catch (Throwable $e) {
-                // Silently ignore kill connection errors. The original query will
-                // continue to completion, and the pool will eventually clean it up.
+        // Registered synchronously so close() always sees a non-empty
+        // pendingKills map regardless of when it runs relative to the fiber.
+        /** @var Promise<mixed> $killPromise */
+        $killPromise = new Promise();
+        $this->pendingKills[$threadId] = $killPromise;
+
+        // Executes in a detached fiber (via async) to:
+        //   1. Prevent blocking the current call stack (especially destructors
+        //      or close).
+        //   2. Root the Promise chain in the Event Loop so PHP's GC doesn't
+        //      destroy it prematurely when the parent method returns.
+        async(function () use ($threadId, $killPromise): void {
+            try {
+
+                $timedKill = Promise::timeout(
+                    Promise::resolved(null)->then(function () use ($threadId) {
+                        // intentionally synchronous to ensure the kill query is
+                        // sent before the parent connection is closed.
+                        /** @var Connection $killConn */
+                        $killConn = await(Connection::create($this->params, $this->connector));
+
+                        try {
+                            // synchronously ensure that the kill query is executed to avoid race condtion
+                            return await($killConn->query("KILL QUERY {$threadId}"));
+                        } finally {
+                            $killConn->close();
+                        }
+                    }),
+                    self::KILL_TIMEOUT_SECONDS
+                );
+
+                await($timedKill);
+
+                // Settle the pre-registered promise on the happy path so that
+                // awaitPendingKills() / allSettled() unblocks promptly.
+                $killPromise->resolve(null);
+            } catch (Throwable) {
+                $killPromise->resolve(null);
+            } finally {
+                // Always unregister so the map stays lean and awaitPendingKills()
+                // resolves promptly once every in-flight kill has settled.
+                unset($this->pendingKills[$threadId]);
             }
         });
+    }
+
+    /**
+     * Returns a promise that resolves once every in-flight KILL QUERY promise
+     * has reached a terminal state (fulfilled, rejected, or timed out).
+     *
+     * Uses Promise::allSettled() rather than Promise::all() so that a failed
+     * or timed-out kill never short-circuits teardown — we always want every
+     * kill to reach a terminal state before we proceed.
+     *
+     * The snapshot of $pendingKills taken here is stable: by the time this
+     * method is called from close(), state is already CLOSED and no new kills
+     * can be dispatched (handleCommandCancellation guards with !isClosed(), and
+     * close() only dispatches before setting the state flag).
+     *
+     * @return PromiseInterface<void>
+     */
+    private function awaitPendingKills(): PromiseInterface
+    {
+        if ($this->pendingKills === []) {
+            return Promise::resolved(null);
+        }
+
+        return Promise::allSettled($this->pendingKills)
+            ->then(function (): void {
+                $this->pendingKills = [];
+            })
+        ;
+    }
+
+    /**
+     * Performs the actual resource release after all pending kills have settled.
+     *
+     * Extracted from close() so it can be invoked either immediately (when no
+     * kills are in-flight) or deferred (after awaitPendingKills() resolves).
+     * Keeping teardown separate ensures the two code paths stay in sync and
+     * cannot diverge over time.
+     *
+     * Note: this method intentionally does NOT null $this->params or
+     * $this->connector. Those are readonly and may still be referenced by
+     * kill fibers that are running concurrently with or after teardown.
+     */
+    private function teardown(): void
+    {
+        if ($this->socket !== null) {
+            $this->socket->close();
+            $this->socket = null;
+        }
+
+        $this->packetReader = null;
+        $this->handshakeHandler = null;
+        $this->queryHandler = null;
+        $this->prepareHandler = null;
+        $this->executeHandler = null;
+        $this->pingHandler = null;
+
+        if ($this->connectPromise !== null) {
+            $this->connectPromise->reject(
+                new ConnectionException('Connection closed before establishing')
+            );
+            $this->connectPromise = null;
+        }
+
+        if ($this->currentCommand !== null) {
+            $this->currentCommand->promise->reject(
+                new ConnectionException('Connection closed during command execution')
+            );
+            $this->currentCommand = null;
+        }
+
+        while (! $this->commandQueue->isEmpty()) {
+            /** @var CommandRequest $cmd */
+            $cmd = $this->commandQueue->dequeue();
+
+            if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
+                $cmd->promise->resolve(null);
+            } else {
+                $cmd->promise->reject(
+                    new ConnectionException('Connection closed before command could execute')
+                );
+            }
+        }
     }
 
     /**

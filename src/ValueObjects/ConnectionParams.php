@@ -6,6 +6,30 @@ namespace Hibla\Mysql\ValueObjects;
 
 final readonly class ConnectionParams
 {
+    public const float DEFAULT_KILL_TIMEOUT_SECONDS = 3.0;
+
+    /**
+     * @param string $host Hostname or IP of the MySQL server.
+     * @param int $port TCP port (default 3306).
+     * @param string $username MySQL username.
+     * @param string $password MySQL password.
+     * @param string $database Default schema to select on connect.
+     * @param string $charset Connection character set.
+     * @param int $connectTimeout Seconds before a connect attempt is aborted.
+     * @param bool $ssl Whether to use SSL for the connection.
+     * @param string|null $sslCa Path to the SSL CA certificate file.
+     * @param string|null $sslCert Path to the SSL client certificate file.
+     * @param string|null $sslKey Path to the SSL client key file.
+     * @param bool $sslVerify Whether to verify the server SSL certificate.
+     * @param float $killTimeoutSeconds How long to wait for a KILL QUERY side-channel
+     *                                  to settle before proceeding with teardown.
+     *                                  Must be greater than zero.
+     * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY when a query
+     *                                           promise is cancelled. When false, cancellation
+     *                                           only transitions the promise state — the
+     *                                           server-side query runs to completion. Defaults
+     *                                           to true.
+     */
     public function __construct(
         public string $host,
         public int $port = 3306,
@@ -19,11 +43,26 @@ final readonly class ConnectionParams
         public ?string $sslCert = null,
         public ?string $sslKey = null,
         public bool $sslVerify = false,
+        public float $killTimeoutSeconds = self::DEFAULT_KILL_TIMEOUT_SECONDS,
+        public bool $enableServerSideCancellation = true,
     ) {
+        if ($this->killTimeoutSeconds <= 0) {
+            throw new \InvalidArgumentException(
+                \sprintf(
+                    'killTimeoutSeconds must be greater than zero, %f given.',
+                    $this->killTimeoutSeconds
+                )
+            );
+        }
     }
 
     /**
      * Creates ConnectionParams from array configuration.
+     *
+     * Recognised keys:
+     *   host, port, username, password, database, charset, connect_timeout,
+     *   ssl, ssl_ca, ssl_cert, ssl_key, ssl_verify, kill_timeout_seconds,
+     *   enable_server_side_cancellation
      *
      * @param array<string, mixed> $config
      */
@@ -73,6 +112,16 @@ final readonly class ConnectionParams
         $sslVerify = $config['ssl_verify'] ?? false;
         $sslVerify = \is_scalar($sslVerify) ? (bool) $sslVerify : false;
 
+        $killTimeoutSeconds = $config['kill_timeout_seconds'] ?? self::DEFAULT_KILL_TIMEOUT_SECONDS;
+        $killTimeoutSeconds = is_numeric($killTimeoutSeconds)
+            ? (float) $killTimeoutSeconds
+            : self::DEFAULT_KILL_TIMEOUT_SECONDS;
+
+        $enableServerSideCancellation = $config['enable_server_side_cancellation'] ?? true;
+        $enableServerSideCancellation = \is_scalar($enableServerSideCancellation)
+            ? (bool) $enableServerSideCancellation
+            : true;
+
         return new self(
             host: $host,
             port: $port,
@@ -86,6 +135,8 @@ final readonly class ConnectionParams
             sslCert: $sslCert,
             sslKey: $sslKey,
             sslVerify: $sslVerify,
+            killTimeoutSeconds: $killTimeoutSeconds,
+            enableServerSideCancellation: $enableServerSideCancellation,
         );
     }
 
@@ -95,6 +146,8 @@ final readonly class ConnectionParams
      * Supports URIs like:
      * - mysql://user:pass@localhost:3306/database
      * - mysql://user:pass@localhost/database?ssl=true&ssl_verify=true
+     * - mysql://user:pass@localhost/database?kill_timeout_seconds=5.0
+     * - mysql://user:pass@localhost/database?enable_server_side_cancellation=false
      * - user:pass@localhost:3306/database (scheme is optional)
      *
      * @param string $uri MySQL connection URI
@@ -132,6 +185,14 @@ final readonly class ConnectionParams
         /** @var string|null $sslKey */
         $sslKey = isset($query['ssl_key']) && \is_string($query['ssl_key']) ? $query['ssl_key'] : null;
 
+        $killTimeoutSeconds = isset($query['kill_timeout_seconds'])
+            ? (float) $query['kill_timeout_seconds']
+            : self::DEFAULT_KILL_TIMEOUT_SECONDS;
+
+        $enableServerSideCancellation = isset($query['enable_server_side_cancellation'])
+            ? filter_var($query['enable_server_side_cancellation'], FILTER_VALIDATE_BOOLEAN)
+            : true;
+
         return new self(
             host: (string) $parts['host'],
             port: isset($parts['port']) ? (int) $parts['port'] : 3306,
@@ -145,6 +206,34 @@ final readonly class ConnectionParams
             sslCert: $sslCert,
             sslKey: $sslKey,
             sslVerify: isset($query['ssl_verify']) ? filter_var($query['ssl_verify'], FILTER_VALIDATE_BOOLEAN) : false,
+            killTimeoutSeconds: $killTimeoutSeconds,
+            enableServerSideCancellation: $enableServerSideCancellation,
+        );
+    }
+
+    /**
+     * Returns a new instance with $enableServerSideCancellation overridden.
+     *
+     * Used by PoolManager to apply a pool-level cancellation override without
+     * mutating the original ConnectionParams the caller passed in.
+     */
+    public function withQueryCancellation(bool $enabled): self
+    {
+        return new self(
+            host: $this->host,
+            port: $this->port,
+            username: $this->username,
+            password: $this->password,
+            database: $this->database,
+            charset: $this->charset,
+            connectTimeout: $this->connectTimeout,
+            ssl: $this->ssl,
+            sslCa: $this->sslCa,
+            sslCert: $this->sslCert,
+            sslKey: $this->sslKey,
+            sslVerify: $this->sslVerify,
+            killTimeoutSeconds: $this->killTimeoutSeconds,
+            enableServerSideCancellation: $enabled,
         );
     }
 

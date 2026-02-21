@@ -32,6 +32,20 @@ use Throwable;
  * this absorption phase the connection is tracked in `$drainingConnections`
  * to guarantee it is never lost — even if `close()` is called mid-drain.
  *
+ * ## Query Cancellation Toggle
+ *
+ * The `$enableServerSideCancellation` constructor parameter controls whether
+ * cancelling a query promise causes a KILL QUERY to be dispatched to the
+ * server. When disabled, cancellation only transitions the promise state —
+ * the server-side query runs to completion and the connection is eventually
+ * returned to the pool normally. This is useful in environments where
+ * side-channel connections are expensive or restricted (e.g. strict firewall
+ * rules, low connection-count quotas, or testing scenarios).
+ *
+ * The toggle is applied by rewriting `ConnectionParams::$enableServerSideCancellation`
+ * before any connection is opened, so all connections in the pool share the
+ * same behaviour for their entire lifetime.
+ *
  * ## Kill Connections
  *
  * KILL QUERY requires a separate TCP connection to the same server (MySQL
@@ -97,23 +111,42 @@ class PoolManager
 
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
-     * @param int $maxSize
-     * @param int $idleTimeout Seconds before an idle connection is closed.
-     * @param int $maxLifetime Seconds before a connection is rotated.
-     * @param ConnectorInterface|null $connector
+     * @param int                $maxSize                 Maximum number of connections in the pool.
+     * @param int                $idleTimeout             Seconds before an idle connection is closed.
+     * @param int                $maxLifetime             Seconds before a connection is rotated.
+     * @param ConnectorInterface|null $connector          Optional custom socket connector.
+     * @param bool               $enableServerSideCancellation Whether cancelling a query promise dispatches
+     *                                                    KILL QUERY to the server. When false, promise
+     *                                                    cancellation only changes the promise state —
+     *                                                    the server-side query runs to completion.
+     *                                                    Defaults to true.
+     *
+     *                                                    This parameter takes precedence over the value
+     *                                                    carried in ConnectionParams, allowing the pool
+     *                                                    to enforce a uniform policy across all
+     *                                                    connections regardless of how ConnectionParams
+     *                                                    was constructed.
      */
     public function __construct(
         ConnectionParams|array|string $config,
         int $maxSize = 10,
         int $idleTimeout = 300,
         int $maxLifetime = 3600,
-        ?ConnectorInterface $connector = null
+        ?ConnectorInterface $connector = null,
+        bool $enableServerSideCancellation = true,
     ) {
-        $this->connectionParams = match (true) {
+        $params = match (true) {
             $config instanceof ConnectionParams => $config,
             \is_array($config) => ConnectionParams::fromArray($config),
             \is_string($config) => ConnectionParams::fromUri($config),
         };
+
+        // Apply the pool-level override if it differs from what ConnectionParams
+        // carries. withQueryCancellation() returns a new immutable instance so
+        // the caller's original ConnectionParams is never mutated.
+        $this->connectionParams = $params->enableServerSideCancellation === $enableServerSideCancellation
+            ? $params
+            : $params->withQueryCancellation($enableServerSideCancellation);
 
         if ($maxSize <= 0) {
             throw new InvalidArgumentException('Pool max size must be greater than 0');
@@ -184,7 +217,7 @@ class PoolManager
 
             unset($this->connectionLastUsed[$connId]);
 
-            // Mark as active so it is tracked if closed mid-usage
+            // Mark as active so it is tracked if closed mid-usage.
             $this->activeConnectionsMap[$connId] = $connection;
 
             $connection->resume();
@@ -232,11 +265,12 @@ class PoolManager
         }
 
         // If the connection is not in a READY state (e.g., still QUERYING) and
-        // was not explicitly cancelled, it means it was released in a dirty or 
+        // was not explicitly cancelled, it means it was released in a dirty or
         // corrupted state (such as an unconsumed stream or a protocol desync).
-        // It cannot safely park in the idle pool because the next borrower 
-        // would receive a broken connection. Instead, it should be destroy completely
-        // and check if the pool need to spin up a fresh replacement for a queued waiter.
+        // It cannot safely park in the idle pool because the next borrower
+        // would receive a broken connection. Instead, destroy it completely
+        // and check if the pool needs to spin up a fresh replacement for a
+        // queued waiter.
         if (! $connection->isReady()) {
             $this->removeConnection($connection);
             $this->satisfyNextWaiter();
@@ -262,6 +296,7 @@ class PoolManager
             'max_size' => $this->maxSize,
             'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
+            'query_cancellation_enabled' => $this->connectionParams->enableServerSideCancellation,
         ];
     }
 
@@ -413,7 +448,7 @@ class PoolManager
                     }
 
                     $connection->clearCancelledFlag();
-                    // Mark active again for releaseClean logic
+                    // Mark active again for releaseClean logic.
                     $this->activeConnectionsMap[$connId] = $connection;
                     $this->releaseClean($connection);
                 },
@@ -458,7 +493,7 @@ class PoolManager
 
         if ($waiter !== null) {
             $connection->resume();
-            // Connection remains in activeConnectionsMap
+            // Connection remains in activeConnectionsMap.
             $waiter->resolve($connection);
 
             return;
@@ -479,7 +514,7 @@ class PoolManager
 
         $this->connectionLastUsed[$connId] = $now;
 
-        // Remove from Active, move to Pool
+        // Remove from active, move to idle pool.
         unset($this->activeConnectionsMap[$connId]);
         $this->pool->enqueue($connection);
     }
@@ -502,7 +537,7 @@ class PoolManager
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
 
-                    // Mark as active
+                    // Mark as active.
                     $this->activeConnectionsMap[$connId] = $connection;
 
                     $promise->resolve($connection);
@@ -536,7 +571,7 @@ class PoolManager
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
 
-                    // Mark as active
+                    // Mark as active.
                     $this->activeConnectionsMap[$connId] = $connection;
 
                     if ($waiter->isCancelled()) {
