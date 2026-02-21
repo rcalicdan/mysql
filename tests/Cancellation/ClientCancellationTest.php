@@ -6,7 +6,6 @@ use function Hibla\await;
 use function Hibla\delay;
 
 use Hibla\EventLoop\Loop;
-use Hibla\Mysql\MysqlClient;
 use Hibla\Promise\Exceptions\CancelledException;
 
 describe('Client Query Cancellation', function (): void {

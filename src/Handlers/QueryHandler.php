@@ -436,7 +436,7 @@ final class QueryHandler
 
     private function writePacket(string $payload): void
     {
-        $MAX_PACKET_SIZE = 16777215; 
+        $MAX_PACKET_SIZE = 16777215;
         $length = \strlen($payload);
         $offset = 0;
 

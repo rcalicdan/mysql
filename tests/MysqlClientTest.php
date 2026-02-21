@@ -648,7 +648,8 @@ describe('MysqlClient', function (): void {
             $client->close();
 
             expect(fn () => $client->getStats())
-                ->toThrow(NotInitializedException::class);
+                ->toThrow(NotInitializedException::class)
+            ;
         });
     });
 });

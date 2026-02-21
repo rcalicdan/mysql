@@ -7,7 +7,6 @@ use function Hibla\await;
 use function Hibla\delay;
 
 use Hibla\EventLoop\Loop;
-use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\RowStream;
 use Hibla\Promise\Exceptions\CancelledException;
 
@@ -223,6 +222,7 @@ describe('Stream Query Cancellation', function (): void {
 
             if ($rowsReceived >= 3) {
                 $stream->cancel();
+
                 break;
             }
         }
@@ -241,6 +241,7 @@ describe('Stream Query Cancellation', function (): void {
 
         foreach ($stream as $row) {
             $stream->cancel();
+
             break;
         }
 
@@ -256,6 +257,7 @@ describe('Stream Query Cancellation', function (): void {
 
         foreach ($stream as $row) {
             $stream->cancel();
+
             break;
         }
 
@@ -417,6 +419,7 @@ describe('Execute Stream Cancellation', function (): void {
 
             if ($rowsReceived >= 3) {
                 $stream->cancel();
+
                 break;
             }
         }
@@ -437,6 +440,7 @@ describe('Execute Stream Cancellation', function (): void {
 
         foreach ($stream as $row) {
             $stream->cancel();
+
             break;
         }
 
@@ -454,6 +458,7 @@ describe('Execute Stream Cancellation', function (): void {
 
         foreach ($stream as $row) {
             $stream->cancel();
+
             break;
         }
 

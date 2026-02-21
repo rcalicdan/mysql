@@ -86,7 +86,7 @@ final class MysqlClient implements SqlClientInterface
      * @param bool $enableStatementCache Whether to enable prepared statement caching. Defaults to true.
      * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY to the server when a
      *                                      query promise is cancelled. Defaults to true.
-     * 
+     *
      *                                      When TRUE: cancelling a promise opens a side-channel TCP
      *                                      connection and sends KILL QUERY <threadId>. The server
      *                                      stops the query immediately, releasing locks and returning

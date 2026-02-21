@@ -1039,7 +1039,8 @@ describe('PreparedStatement', function (): void {
             $row = $result->fetchOne();
 
             expect(str_contains($row['tags'], 'php'))->toBeTrue()
-                ->and(str_contains($row['tags'], 'mysql'))->toBeTrue();
+                ->and(str_contains($row['tags'], 'mysql'))->toBeTrue()
+            ;
 
             await($stmt->close());
             $conn->close();

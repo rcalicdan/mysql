@@ -387,7 +387,8 @@ class PoolManager
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                );
+                )
+            ;
         }
 
         Promise::all($checkPromises)

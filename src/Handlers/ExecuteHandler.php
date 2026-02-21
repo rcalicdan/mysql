@@ -67,7 +67,8 @@ final class ExecuteHandler
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<int, mixed> $params
@@ -264,7 +265,7 @@ final class ExecuteHandler
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $columns = array_map(fn(ColumnDefinition $c) => $c->name, $this->columnDefinitions);
+                $columns = array_map(fn (ColumnDefinition $c) => $c->name, $this->columnDefinitions);
                 $result = new Result(
                     rows: $this->rows,
                     affectedRows: 0,
@@ -559,7 +560,7 @@ final class ExecuteHandler
 
     private function writePacket(string $payload): void
     {
-        $MAX_PACKET_SIZE = 16777215; 
+        $MAX_PACKET_SIZE = 16777215;
         $length = \strlen($payload);
         $offset = 0;
 

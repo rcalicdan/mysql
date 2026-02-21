@@ -518,7 +518,8 @@ describe('Concurrent Query Execution', function (): void {
 
             expect($healthStats['unhealthy'])->toBe(0)
                 ->and($r1->fetchOne()['val'])->toBe('2')
-                ->and($r2->fetchOne()['val'])->toBe('3');
+                ->and($r2->fetchOne()['val'])->toBe('3')
+            ;
 
             $client->close();
         });
