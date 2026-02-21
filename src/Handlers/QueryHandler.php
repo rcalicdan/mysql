@@ -436,9 +436,22 @@ final class QueryHandler
 
     private function writePacket(string $payload): void
     {
-        $len = \strlen($payload);
-        $header = substr(pack('V', $len), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . $payload);
+        $MAX_PACKET_SIZE = 16777215; 
+        $length = \strlen($payload);
+        $offset = 0;
+
+        // If payload is larger than 16MB, split it
+        while ($length >= $MAX_PACKET_SIZE) {
+            $header = "\xFF\xFF\xFF" . \chr($this->sequenceId);
+            $this->socket->write($header . substr($payload, $offset, $MAX_PACKET_SIZE));
+
+            $this->sequenceId++;
+            $length -= $MAX_PACKET_SIZE;
+            $offset += $MAX_PACKET_SIZE;
+        }
+
+        $header = substr(pack('V', $length), 0, 3) . \chr($this->sequenceId);
+        $this->socket->write($header . substr($payload, $offset));
         $this->sequenceId++;
     }
 }

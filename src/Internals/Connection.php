@@ -378,7 +378,7 @@ class Connection
         if (
             ($this->state === ConnectionState::QUERYING || $this->state === ConnectionState::EXECUTING)
             && $this->threadId > 0
-            && $this->params->enableServerSideCancellation  
+            && $this->params->enableServerSideCancellation
         ) {
             $this->dispatchKillQuery($this->threadId);
         }
@@ -396,8 +396,8 @@ class Connection
         // timed-out kill never silently skips cleanup.
         if ($this->pendingKills !== []) {
             $this->awaitPendingKills()->then(
-                fn() => $this->teardown(),
-                fn() => $this->teardown()
+                $this->teardown(...),
+                $this->teardown(...)
             );
 
             return;
@@ -682,11 +682,12 @@ class Connection
     private function awaitPendingKills(): PromiseInterface
     {
         if ($this->pendingKills === []) {
+            // @phpstan-ignore-next-line
             return Promise::resolved(null);
         }
 
         return Promise::allSettled($this->pendingKills)
-            ->then(function (): void {
+            ->then(function () {
                 $this->pendingKills = [];
             })
         ;
