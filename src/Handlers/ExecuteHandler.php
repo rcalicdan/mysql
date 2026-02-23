@@ -67,8 +67,7 @@ final class ExecuteHandler
     public function __construct(
         private readonly SocketConnection $socket,
         private readonly CommandBuilder $commandBuilder
-    ) {
-    }
+    ) {}
 
     /**
      * @param array<int, mixed> $params
@@ -265,7 +264,7 @@ final class ExecuteHandler
 
                 $this->currentPromise?->resolve($stats);
             } else {
-                $columns = array_map(fn (ColumnDefinition $c) => $c->name, $this->columnDefinitions);
+                $columns = array_map(fn(ColumnDefinition $c) => $c->name, $this->columnDefinitions);
                 $result = new Result(
                     rows: $this->rows,
                     affectedRows: 0,
@@ -417,8 +416,8 @@ final class ExecuteHandler
             MysqlType::TINY => $reader->readFixedInteger(1),
             MysqlType::SHORT, MysqlType::YEAR => $reader->readFixedInteger(2),
             MysqlType::LONG, MysqlType::INT24 => $reader->readFixedInteger(4),
-            MysqlType::FLOAT => ($u = unpack('f', $reader->readFixedString(4))) !== false ? $u[1] : 0.0,
-            MysqlType::DOUBLE => ($u = unpack('d', $reader->readFixedString(8))) !== false ? $u[1] : 0.0,
+            MysqlType::FLOAT => ($u = unpack('g', $reader->readFixedString(4))) !== false ? $u[1] : 0.0,
+            MysqlType::DOUBLE => ($u = unpack('e', $reader->readFixedString(8))) !== false ? $u[1] : 0.0,
             MysqlType::DATE,
             MysqlType::DATETIME,
             MysqlType::TIMESTAMP => $this->readBinaryDateTime($reader, $column->type),

@@ -629,39 +629,36 @@ class Connection
         //      or close).
         //   2. Root the Promise chain in the Event Loop so PHP's GC doesn't
         //      destroy it prematurely when the parent method returns.
-        async(function () use ($threadId, $killPromise): void {
-            try {
+        try {
+            async(function () use ($threadId, $killPromise): void {
+                try {
+                    $timedKill = Promise::timeout(
+                        Promise::resolved(null)->then(function () use ($threadId) {
+                            return Connection::create($this->params, $this->connector)
+                                ->then(function ($killConn) use ($threadId) {
+                                    return $killConn->query("KILL QUERY {$threadId}")
+                                        ->finally(function () use ($killConn) {
+                                            $killConn->close();
+                                        });
+                                });
+                        }),
+                        $this->params->killTimeoutSeconds
+                    );
 
-                $timedKill = Promise::timeout(
-                    Promise::resolved(null)->then(function () use ($threadId) {
-                        // intentionally synchronous to ensure the kill query is
-                        // sent before the parent connection is closed.
-                        /** @var Connection $killConn */
-                        $killConn = await(Connection::create($this->params, $this->connector));
-
-                        try {
-                            // synchronously ensure that the kill query is executed to avoid race condtion
-                            return await($killConn->query("KILL QUERY {$threadId}"));
-                        } finally {
-                            $killConn->close();
-                        }
-                    }),
-                    self::KILL_TIMEOUT_SECONDS
-                );
-
-                await($timedKill);
-
-                // Settle the pre-registered promise on the happy path so that
-                // awaitPendingKills() / allSettled() unblocks promptly.
-                $killPromise->resolve(null);
-            } catch (Throwable) {
-                $killPromise->resolve(null);
-            } finally {
-                // Always unregister so the map stays lean and awaitPendingKills()
-                // resolves promptly once every in-flight kill has settled.
-                unset($this->pendingKills[$threadId]);
-            }
-        });
+                    await($timedKill);
+                    $killPromise->resolve(null);
+                } catch (Throwable) {
+                    $killPromise->resolve(null);
+                } finally {
+                    unset($this->pendingKills[$threadId]);
+                }
+            });
+        } catch (Throwable $e) {
+            // If async() throws synchronously (e.g., event loop is dead during PHP shutdown),
+            // safely discard the kill attempt so it don't crash the destructor.
+            unset($this->pendingKills[$threadId]);
+            $killPromise->resolve(null);
+        }
     }
 
     /**

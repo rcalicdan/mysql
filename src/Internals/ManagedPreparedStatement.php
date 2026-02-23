@@ -32,8 +32,7 @@ class ManagedPreparedStatement implements PreparedStatementInterface
         private readonly PreparedStatementInterface $statement,
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {
-    }
+    ) {}
 
     /**
      * {@inheritdoc}
@@ -131,6 +130,10 @@ class ManagedPreparedStatement implements PreparedStatementInterface
      */
     public function __destruct()
     {
+        if (!$this->isReleased && !$this->connection->isClosed()) {
+            $this->connection->close();
+        }
+
         $this->releaseConnection();
     }
 }
