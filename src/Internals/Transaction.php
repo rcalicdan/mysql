@@ -40,7 +40,8 @@ class Transaction implements TransactionInterface
     public function __construct(
         private readonly Connection $connection,
         private readonly PoolManager $pool
-    ) {}
+    ) {
+    }
 
     /**
      * {@inheritdoc}
@@ -121,7 +122,7 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
+                ->then(fn (ResultInterface $result) => $result->getAffectedRows())
         );
     }
 
@@ -132,7 +133,7 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
+                ->then(fn (ResultInterface $result) => $result->getLastInsertId())
         );
     }
 
@@ -143,7 +144,7 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn(ResultInterface $result) => $result->fetchOne())
+                ->then(fn (ResultInterface $result) => $result->fetchOne())
         );
     }
 
@@ -277,7 +278,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to create savepoint '{$identifier}': " . $e->getMessage(),
@@ -301,7 +303,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
@@ -325,7 +328,8 @@ class Transaction implements TransactionInterface
 
         return $this->connection->query("RELEASE SAVEPOINT {$escaped}")
             ->then(
-                function (): void {},
+                function (): void {
+                },
                 function (\Throwable $e) use ($identifier): never {
                     throw new TransactionException(
                         "Failed to release savepoint '{$identifier}': " . $e->getMessage(),
@@ -440,7 +444,7 @@ class Transaction implements TransactionInterface
     public function __destruct()
     {
         // ensure the connection is closed before releasing it
-        if ($this->active && !$this->connection->isClosed()) {
+        if ($this->active && ! $this->connection->isClosed()) {
             $this->connection->close();
         }
 

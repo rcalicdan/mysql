@@ -341,7 +341,6 @@ describe('Transaction Stream Cancellation', function (): void {
     });
 });
 
-
 describe('Transaction Commit and Rollback Cancellation Resistance', function (): void {
 
     it('completes commit despite an immediate cancel() call and persists data', function (): void {

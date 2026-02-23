@@ -297,6 +297,7 @@ class PoolManager
             'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
             'query_cancellation_enabled' => $this->connectionParams->enableServerSideCancellation,
+            'compression_enabled' => $this->connectionParams->compress,
         ];
     }
 

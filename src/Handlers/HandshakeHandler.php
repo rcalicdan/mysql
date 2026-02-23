@@ -24,7 +24,7 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 
 /**
- * Handles MySQL handshake protocol including SSL/TLS upgrade.
+ * Handles MySQL handshake protocol including SSL/TLS upgrade and Compression negotiation.
  *
  * MySQL uses a STARTTLS-like protocol which requires upgrading an existing
  * plain-text connection to encrypted during the handshake phase. This is
@@ -50,7 +50,16 @@ final class HandshakeHandler
      */
     private int $threadId = 0;
 
-    /** @var Promise<int> The promise that resolves with the next sequence ID on successful handshake. */
+    /**
+     * Whether compression was successfully negotiated.
+     * If true, the connection MUST switch to a CompressedPacketReader/Writer
+     * immediately after the handshake completes.
+     */
+    private bool $compressionNegotiated = false;
+
+    /**
+     *  @var Promise<int> The promise that resolves with the next sequence ID on successful handshake.
+     */
     private Promise $promise;
 
     public function __construct(
@@ -69,6 +78,14 @@ final class HandshakeHandler
     public function getThreadId(): int
     {
         return $this->threadId;
+    }
+
+    /**
+     * Returns whether the CLIENT_COMPRESS capability was agreed upon.
+     */
+    public function isCompressionEnabled(): bool
+    {
+        return $this->compressionNegotiated;
     }
 
     /**
@@ -122,6 +139,12 @@ final class HandshakeHandler
             $this->sequenceId = $seq + 1;
 
             $clientCaps = $this->calculateCapabilities();
+
+            // Store negotiation result. If both client and server agreed on compression,
+            // it must flag it so the Connection can upgrade the reader/writer later.
+            if (($clientCaps & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
+                $this->compressionNegotiated = true;
+            }
 
             if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) !== 0) {
                 $this->performSslUpgrade($clientCaps);
@@ -374,6 +397,11 @@ final class HandshakeHandler
 
         if ($this->params->useSsl()) {
             $flags |= CapabilityFlags::CLIENT_SSL;
+        }
+
+        // Enable Compression if requested and server supports it
+        if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
+            $flags |= CapabilityFlags::CLIENT_COMPRESS;
         }
 
         return $flags;

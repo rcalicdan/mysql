@@ -149,16 +149,16 @@ describe('PrepareHandler', function () {
         $paramReader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $paramReader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('test', 'users', 'users', 'name', 'name');
         $paramReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
-        $paramReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0); 
-        $paramReader->shouldReceive('readFixedInteger')->with(4)->andReturn(255); 
-        $paramReader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0); 
+        $paramReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0);
+        $paramReader->shouldReceive('readFixedInteger')->with(4)->andReturn(255);
+        $paramReader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0);
 
         $result2 = $handler->processPacket($paramReader, 30, 1);
         expect($result2)->toBeFalse();
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
 
         $result3 = $handler->processPacket($eofReader, 5, 2);
 
@@ -210,8 +210,8 @@ describe('PrepareHandler', function () {
         $col1Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('test', 'users', 'users', 'id', 'id');
         $col1Reader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
         $col1Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 16899, 0);
-        $col1Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(11); 
-        $col1Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0); 
+        $col1Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(11);
+        $col1Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0);
 
         $result2 = $handler->processPacket($col1Reader, 30, 1);
         expect($result2)->toBeFalse();
@@ -221,16 +221,16 @@ describe('PrepareHandler', function () {
         $col2Reader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $col2Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('test', 'users', 'users', 'name', 'name');
         $col2Reader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
-        $col2Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0); 
+        $col2Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0);
         $col2Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(255);
-        $col2Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0); 
+        $col2Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0);
 
         $result3 = $handler->processPacket($col2Reader, 30, 2);
         expect($result3)->toBeFalse();
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
 
         $result4 = $handler->processPacket($eofReader, 5, 3);
 
@@ -283,14 +283,14 @@ describe('PrepareHandler', function () {
         $paramReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
         $paramReader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 128, 0);
         $paramReader->shouldReceive('readFixedInteger')->with(4)->andReturn(11);
-        $paramReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0); 
+        $paramReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0);
 
         $result2 = $handler->processPacket($paramReader, 30, 1);
         expect($result2)->toBeFalse();
 
         $paramEofReader = Mockery::mock(PayloadReader::class);
         $paramEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $paramEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $paramEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
 
         $result3 = $handler->processPacket($paramEofReader, 5, 2);
         expect($result3)->toBeFalse();
@@ -300,9 +300,9 @@ describe('PrepareHandler', function () {
         $col1Reader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $col1Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('test', 'users', 'users', 'id', 'id');
         $col1Reader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
-        $col1Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 16899, 0); 
+        $col1Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 16899, 0);
         $col1Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(11);
-        $col1Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0); 
+        $col1Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 0);
 
         $result4 = $handler->processPacket($col1Reader, 30, 3);
         expect($result4)->toBeFalse();
@@ -312,16 +312,16 @@ describe('PrepareHandler', function () {
         $col2Reader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $col2Reader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('test', 'users', 'users', 'name', 'name');
         $col2Reader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(null);
-        $col2Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0); 
-        $col2Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(255); 
-        $col2Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0); 
+        $col2Reader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0);
+        $col2Reader->shouldReceive('readFixedInteger')->with(4)->andReturn(255);
+        $col2Reader->shouldReceive('readFixedInteger')->with(1)->andReturn(253, 0);
 
         $result5 = $handler->processPacket($col2Reader, 30, 4);
         expect($result5)->toBeFalse();
 
         $colEofReader = Mockery::mock(PayloadReader::class);
         $colEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $colEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $colEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
 
         $result6 = $handler->processPacket($colEofReader, 5, 5);
 
@@ -356,7 +356,7 @@ describe('PrepareHandler', function () {
         $handler->start('SELECT 1', $promise);
 
         $payloadReader = Mockery::mock(PayloadReader::class);
-        $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x01); 
+        $payloadReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0x01);
 
         $handler->processPacket($payloadReader, 10, 0);
 

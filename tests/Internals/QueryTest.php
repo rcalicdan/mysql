@@ -1341,4 +1341,223 @@ describe('Query (Text Protocol)', function (): void {
             $conn->close();
         });
     });
+
+    describe('International Characters', function (): void {
+
+        it('returns Chinese characters correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '你好世界' as chinese"));
+            $row = $result->fetchOne();
+
+            expect($row['chinese'])->toBe('你好世界');
+
+            $conn->close();
+        });
+
+        it('returns Japanese hiragana and kanji correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 'こんにちは世界' as japanese"));
+            $row = $result->fetchOne();
+
+            expect($row['japanese'])->toBe('こんにちは世界');
+
+            $conn->close();
+        });
+
+        it('returns Korean characters correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '안녕하세요 세계' as korean"));
+            $row = $result->fetchOne();
+
+            expect($row['korean'])->toBe('안녕하세요 세계');
+
+            $conn->close();
+        });
+
+        it('returns Arabic characters correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 'مرحبا بالعالم' as arabic"));
+            $row = $result->fetchOne();
+
+            expect($row['arabic'])->toBe('مرحبا بالعالم');
+
+            $conn->close();
+        });
+
+        it('returns Cyrillic/Russian characters correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 'Привет мир' as russian"));
+            $row = $result->fetchOne();
+
+            expect($row['russian'])->toBe('Привет мир');
+
+            $conn->close();
+        });
+
+        it('returns Thai characters correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 'สวัสดีชาวโลก' as thai"));
+            $row = $result->fetchOne();
+
+            expect($row['thai'])->toBe('สวัสดีชาวโลก');
+
+            $conn->close();
+        });
+
+        it('returns single emoji correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '😀' as emoji"));
+            $row = $result->fetchOne();
+
+            expect($row['emoji'])->toBe('😀');
+
+            $conn->close();
+        });
+
+        it('returns multiple different emoji correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '😀🎸🌍🚀💡🔥' as emojis"));
+            $row = $result->fetchOne();
+
+            expect($row['emojis'])->toBe('😀🎸🌍🚀💡🔥');
+
+            $conn->close();
+        });
+
+        it('returns emoji with skin tone modifier correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '👋🏽' as skin_tone_emoji"));
+            $row = $result->fetchOne();
+
+            expect($row['skin_tone_emoji'])->toBe('👋🏽');
+
+            $conn->close();
+        });
+
+        it('returns emoji ZWJ family sequence correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '👨‍👩‍👧‍👦' as family_emoji"));
+            $row = $result->fetchOne();
+
+            expect($row['family_emoji'])->toBe('👨‍👩‍👧‍👦');
+
+            $conn->close();
+        });
+
+        it('returns mixed CJK and emoji in one string correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT '你好 😀 世界 🌍 こんにちは 🎸' as mixed_cjk_emoji"));
+            $row = $result->fetchOne();
+
+            expect($row['mixed_cjk_emoji'])->toBe('你好 😀 世界 🌍 こんにちは 🎸');
+
+            $conn->close();
+        });
+
+        it('returns mixed scripts with ASCII correctly', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 'Hello 世界 Привет مرحبا 안녕 World' as mixed_scripts"));
+            $row = $result->fetchOne();
+
+            expect($row['mixed_scripts'])->toBe('Hello 世界 Привет مرحبا 안녕 World');
+
+            $conn->close();
+        });
+
+        it('returns long CJK string with correct character and byte counts', function (): void {
+            $conn = makeConnection();
+            $str = str_repeat('中文字符', 250);
+            $result = await($conn->query("SELECT '$str' as long_cjk, CHAR_LENGTH('$str') as char_len, LENGTH('$str') as byte_len"));
+            $row = $result->fetchOne();
+
+            expect($row['long_cjk'])->toBe($str)
+                ->and((int) $row['char_len'])->toBe(1000)
+                ->and((int) $row['byte_len'])->toBe(3000);
+
+            $conn->close();
+        });
+
+        it('returns long emoji string with correct character count', function (): void {
+            $conn = makeConnection();
+            $str = str_repeat('🎸', 200);
+            $result = await($conn->query("SELECT '$str' as long_emoji, CHAR_LENGTH('$str') as char_len, LENGTH('$str') as byte_len"));
+            $row = $result->fetchOne();
+
+            expect($row['long_emoji'])->toBe($str)
+                ->and((int) $row['char_len'])->toBe(200)
+                ->and((int) $row['byte_len'])->toBe(800);
+
+            $conn->close();
+        });
+
+        it('MySQL LENGTH() returns byte count not character count for multibyte strings', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT LENGTH('🎸') as byte_len, CHAR_LENGTH('🎸') as char_len"));
+            $row = $result->fetchOne();
+
+            expect((int) $row['byte_len'])->toBe(4)
+                ->and((int) $row['char_len'])->toBe(1);
+
+            $conn->close();
+        });
+
+        it('MySQL LENGTH() returns byte count not character count for CJK characters', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT LENGTH('你好') as byte_len, CHAR_LENGTH('你好') as char_len"));
+            $row = $result->fetchOne();
+
+            expect((int) $row['byte_len'])->toBe(6)
+                ->and((int) $row['char_len'])->toBe(2);
+
+            $conn->close();
+        });
+
+        it('handles UPPER and LOWER on non-ASCII characters', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT UPPER('привет') as upper_cyr, LOWER('ПРИВЕТ') as lower_cyr"));
+            $row = $result->fetchOne();
+
+            expect($row['upper_cyr'])->toBe('ПРИВЕТ')
+                ->and($row['lower_cyr'])->toBe('привет');
+
+            $conn->close();
+        });
+
+        it('handles REVERSE on multibyte string', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT REVERSE('abc') as rev_ascii, CHAR_LENGTH(REVERSE('你好世界')) as rev_cjk_len"));
+            $row = $result->fetchOne();
+
+            expect($row['rev_ascii'])->toBe('cba')
+                ->and((int) $row['rev_cjk_len'])->toBe(4);
+
+            $conn->close();
+        });
+
+        it('handles CONCAT of multiple scripts', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT CONCAT('Hello', ' ', '世界', ' ', '🎸') as concat_result"));
+            $row = $result->fetchOne();
+
+            expect($row['concat_result'])->toBe('Hello 世界 🎸');
+
+            $conn->close();
+        });
+
+        it('handles LIKE pattern matching with multibyte characters', function (): void {
+            $conn = makeConnection();
+            $result = await($conn->query("SELECT 
+            '你好世界' LIKE '你好%' as cjk_prefix,
+            '🎸🎵🌍' LIKE '%🌍' as emoji_suffix,
+            'Привет мир' LIKE '%мир' as cyrillic_suffix
+        "));
+            $row = $result->fetchOne();
+
+            expect($row['cjk_prefix'])->toBe('1')
+                ->and($row['emoji_suffix'])->toBe('1')
+                ->and($row['cyrillic_suffix'])->toBe('1');
+
+            $conn->close();
+        });
+    });
 });

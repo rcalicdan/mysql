@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\PrepareState;
-use Hibla\Mysql\Internals\Connection as MysqlConnection;
+use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\PreparedException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
@@ -22,17 +21,17 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 final class PrepareHandler
 {
     /**
-     * @var array<int, ColumnDefinition> 
+     *  @var array<int, ColumnDefinition>
      */
     private array $columnDefinitions = [];
 
     /**
-     *  @var array<int, ColumnDefinition> 
+     *  @var array<int, ColumnDefinition>
      */
     private array $paramDefinitions = [];
 
     /**
-     * @var Promise<PreparedStatement>|null 
+     *  @var Promise<PreparedStatement>|null
      */
     private ?Promise $currentPromise = null;
 
@@ -47,10 +46,10 @@ final class PrepareHandler
     private int $numParams = 0;
 
     public function __construct(
-        private readonly MysqlConnection $connection,
-        private readonly SocketConnection $socket,
+        private readonly Connection $connection,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     /**
      * @param Promise<PreparedStatement> $promise
@@ -64,7 +63,8 @@ final class PrepareHandler
         $this->paramDefinitions = [];
 
         $packet = $this->commandBuilder->buildStmtPrepare($sql);
-        $this->writePacket($packet);
+
+        $this->connection->writePacket($packet, $this->sequenceId);
     }
 
     public function processPacket(PayloadReader $reader, int $length, int $seq): bool
@@ -140,10 +140,12 @@ final class PrepareHandler
         if ($frame instanceof EofPacket) {
             if ($type === 'params' && $this->numColumns > 0) {
                 $this->state = PrepareState::DRAIN_COLUMNS;
+
                 return false;
             }
 
             $this->finish();
+
             return true;
         }
 
@@ -182,26 +184,5 @@ final class PrepareHandler
         );
 
         $this->currentPromise?->resolve($stmt);
-    }
-
-    private function writePacket(string $payload): void
-    {
-        $MAX_PACKET_SIZE = 16777215;
-        $length = \strlen($payload);
-        $offset = 0;
-
-        // If payload is larger than 16MB, split it
-        while ($length >= $MAX_PACKET_SIZE) {
-            $header = "\xFF\xFF\xFF" . \chr($this->sequenceId);
-            $this->socket->write($header . substr($payload, $offset, $MAX_PACKET_SIZE));
-
-            $this->sequenceId++;
-            $length -= $MAX_PACKET_SIZE;
-            $offset += $MAX_PACKET_SIZE;
-        }
-
-        $header = substr(pack('V', $length), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . substr($payload, $offset));
-        $this->sequenceId++;
     }
 }

@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\ExecuteState;
+use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
@@ -29,8 +29,6 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 /**
  * Handles binary protocol prepared statement execution (COM_STMT_EXECUTE).
  *
- * Supports both buffered and streaming modes.
- *
  * @internal
  */
 final class ExecuteHandler
@@ -47,19 +45,26 @@ final class ExecuteHandler
 
     private ?StreamContext $streamContext = null;
 
-    /** @var Promise<Result|StreamStats>|null */
+    /**
+     *  @var Promise<Result|StreamStats>|null
+     */
     private ?Promise $currentPromise = null;
 
-    /** @var array<int, array<string, mixed>> */
+    /**
+     *  @var array<int, array<string, mixed>>
+     */
     private array $rows = [];
 
-    /** @var array<int, ColumnDefinition> */
+    /**
+     *  @var array<int, ColumnDefinition>
+     */
     private array $columnDefinitions = [];
 
     public function __construct(
-        private readonly SocketConnection $socket,
+        private readonly Connection $connection,
         private readonly CommandBuilder $commandBuilder
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<int, mixed> $params
@@ -85,7 +90,8 @@ final class ExecuteHandler
         $this->streamStartTime = (float) hrtime(true);
 
         $packet = $this->commandBuilder->buildStmtExecute($stmtId, array_values($params));
-        $this->writePacket($packet);
+
+        $this->connection->writePacket($packet, $this->sequenceId);
     }
 
     public function processPacket(PayloadReader $reader, int $length, int $seq): bool
@@ -135,8 +141,9 @@ final class ExecuteHandler
         $frame = $responseParser->parseResponse($reader, $length, $seq);
 
         if ($frame instanceof ErrPacket) {
-            $exception = $this->createExceptionFromError($frame->errorCode, $frame->errorMessage);
-            $this->currentPromise?->reject($exception);
+            $this->currentPromise?->reject(
+                $this->createExceptionFromError($frame->errorCode, $frame->errorMessage)
+            );
 
             return true;
         }
@@ -168,7 +175,7 @@ final class ExecuteHandler
         $parser = new ColumnDefinitionOrEofParser();
         $frame = $parser->parse($reader, $length, $seq);
 
-        // Server optimized stream by skipping metadata. Data begins immediately.
+        // Optimization: Server omitted metadata, the 0x00 byte was actually the start of a BinaryRow
         if ($frame instanceof MetadataOmittedRowMarker) {
             $this->state = ExecuteState::ROWS;
             $rowParser = new BinaryRowOrEofParser($this->columnDefinitions);
@@ -293,7 +300,7 @@ final class ExecuteHandler
 
             $this->currentPromise?->resolve($stats);
         } else {
-            $columns = array_map(fn(ColumnDefinition $c) => $c->name, $this->columnDefinitions);
+            $columns = array_map(fn (ColumnDefinition $c) => $c->name, $this->columnDefinitions);
             $result = new Result(
                 rows: $this->rows,
                 affectedRows: 0,
@@ -326,26 +333,5 @@ final class ExecuteHandler
         }
 
         return new QueryException($message, $errorCode);
-    }
-
-    private function writePacket(string $payload): void
-    {
-        $MAX_PACKET_SIZE = 16777215; 
-        $length = \strlen($payload);
-        $offset = 0;
-
-        // If payload is larger than 16MB, split it
-        while ($length >= $MAX_PACKET_SIZE) {
-            $header = "\xFF\xFF\xFF" . \chr($this->sequenceId);
-            $this->socket->write($header . substr($payload, $offset, $MAX_PACKET_SIZE));
-
-            $this->sequenceId++;
-            $length -= $MAX_PACKET_SIZE;
-            $offset += $MAX_PACKET_SIZE;
-        }
-
-        $header = substr(pack('V', $length), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . substr($payload, $offset));
-        $this->sequenceId++;
     }
 }

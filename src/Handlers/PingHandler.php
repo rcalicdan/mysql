@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Handlers;
 
+use Hibla\Mysql\Internals\Connection;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\ConnectionException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
@@ -16,11 +16,13 @@ final class PingHandler
 {
     private int $sequenceId = 0;
 
-    /** @var Promise<bool>|null */
+    /**
+     *  @var Promise<bool>|null
+     */
     private ?Promise $currentPromise = null;
 
     public function __construct(
-        private readonly SocketConnection $socket
+        private readonly Connection $connection
     ) {
     }
 
@@ -32,8 +34,9 @@ final class PingHandler
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
 
-        $payload = \chr(0x0E);
-        $this->writePacket($payload);
+        $payload = \chr(0x0E); // Command: PING
+
+        $this->connection->writePacket($payload, $this->sequenceId);
     }
 
     public function processPacket(PayloadReader $reader, int $length, int $seq): bool
@@ -94,13 +97,5 @@ final class PingHandler
             "MySQL Ping Error [{$packet->errorCode}]: {$packet->errorMessage} - {$errorDescription}",
             $packet->errorCode
         );
-    }
-
-    private function writePacket(string $payload): void
-    {
-        $len = \strlen($payload);
-        $header = substr(pack('V', $len), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . $payload);
-        $this->sequenceId++;
     }
 }

@@ -5,26 +5,26 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\ParserState;
+use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\EofPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\RowOrEofParser;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\TextRow;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
-use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
-use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
  * Handles text protocol query execution (COM_QUERY).
@@ -71,7 +71,7 @@ final class QueryHandler
     private array $rows = [];
 
     public function __construct(
-        private readonly SocketConnection $socket,
+        private readonly Connection $connection,
         private readonly CommandBuilder $commandBuilder
     ) {
         $this->responseParser = new ResponseParser();
@@ -97,7 +97,8 @@ final class QueryHandler
         $this->isDraining = false;
 
         $packet = $this->commandBuilder->buildQuery($sql);
-        $this->writePacket($packet);
+
+        $this->connection->writePacket($packet, $this->sequenceId);
     }
 
     public function processPacket(PayloadReader $reader, int $length, int $seq): void
@@ -224,12 +225,17 @@ final class QueryHandler
         if ($frame instanceof EofPacket) {
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
+
             return;
         }
 
         if ($frame instanceof ErrPacket) {
-            $exception = $this->createExceptionFromError($frame->errorCode, $frame->errorMessage);
+            $exception = $this->createExceptionFromError(
+                $frame->errorCode,
+                $frame->errorMessage
+            );
             $this->currentPromise?->reject($exception);
+
             return;
         }
 
@@ -239,10 +245,14 @@ final class QueryHandler
             }
 
             $this->columns[] = $frame->name !== '' ? $frame->name : 'unknown';
+
             return;
         }
 
-        $exception = new QueryException('Unexpected packet type in query column definitions', 0);
+        $exception = new QueryException(
+            'Unexpected packet type in query column definitions',
+            0
+        );
         $this->currentPromise?->reject($exception);
     }
 
@@ -425,26 +435,5 @@ final class QueryHandler
         }
 
         return new QueryException($message, $errorCode);
-    }
-
-    private function writePacket(string $payload): void
-    {
-        $MAX_PACKET_SIZE = 16777215;
-        $length = \strlen($payload);
-        $offset = 0;
-
-        // If payload is larger than 16MB, split it
-        while ($length >= $MAX_PACKET_SIZE) {
-            $header = "\xFF\xFF\xFF" . \chr($this->sequenceId);
-            $this->socket->write($header . substr($payload, $offset, $MAX_PACKET_SIZE));
-
-            $this->sequenceId++;
-            $length -= $MAX_PACKET_SIZE;
-            $offset += $MAX_PACKET_SIZE;
-        }
-
-        $header = substr(pack('V', $length), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . substr($payload, $offset));
-        $this->sequenceId++;
     }
 }

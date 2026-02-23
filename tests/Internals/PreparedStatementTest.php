@@ -435,10 +435,6 @@ describe('PreparedStatement', function (): void {
         });
     });
 
-    // ---------------------------------------------------------------------------
-    // String Edge Cases
-    // ---------------------------------------------------------------------------
-
     describe('String Edge Cases', function (): void {
 
         it('handles binary data', function (): void {
@@ -1041,6 +1037,222 @@ describe('PreparedStatement', function (): void {
             expect(str_contains($row['tags'], 'php'))->toBeTrue()
                 ->and(str_contains($row['tags'], 'mysql'))->toBeTrue()
             ;
+
+            await($stmt->close());
+            $conn->close();
+        });
+    });
+
+    describe('International Characters', function (): void {
+
+        it('handles Chinese characters', function (): void {
+            $conn = makeConnection();
+            $str = '你好世界';
+            $stmt = await($conn->prepare('SELECT ? as chinese'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['chinese'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles Japanese hiragana and kanji', function (): void {
+            $conn = makeConnection();
+            $str = 'こんにちは世界';
+            $stmt = await($conn->prepare('SELECT ? as japanese'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['japanese'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles Korean characters', function (): void {
+            $conn = makeConnection();
+            $str = '안녕하세요 세계';
+            $stmt = await($conn->prepare('SELECT ? as korean'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['korean'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles Arabic characters', function (): void {
+            $conn = makeConnection();
+            $str = 'مرحبا بالعالم';
+            $stmt = await($conn->prepare('SELECT ? as arabic'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['arabic'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles Russian/Cyrillic characters', function (): void {
+            $conn = makeConnection();
+            $str = 'Привет мир';
+            $stmt = await($conn->prepare('SELECT ? as russian'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['russian'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles Thai characters', function (): void {
+            $conn = makeConnection();
+            $str = 'สวัสดีชาวโลก';
+            $stmt = await($conn->prepare('SELECT ? as thai'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['thai'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles single emoji', function (): void {
+            $conn = makeConnection();
+            $str = '😀';
+            $stmt = await($conn->prepare('SELECT ? as emoji'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['emoji'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles multiple different emoji', function (): void {
+            $conn = makeConnection();
+            $str = '😀🎸🌍🚀💡🔥';
+            $stmt = await($conn->prepare('SELECT ? as emojis'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['emojis'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles emoji with skin tone modifier', function (): void {
+            $conn = makeConnection();
+            $str = '👋🏽'; 
+            $stmt = await($conn->prepare('SELECT ? as skin_tone_emoji'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['skin_tone_emoji'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles emoji family sequence (ZWJ sequence)', function (): void {
+            $conn = makeConnection();
+            $str = '👨‍👩‍👧‍👦'; 
+            $stmt = await($conn->prepare('SELECT ? as family_emoji'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['family_emoji'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles mixed CJK and emoji in one string', function (): void {
+            $conn = makeConnection();
+            $str = '你好 😀 世界 🌍 こんにちは 🎸';
+            $stmt = await($conn->prepare('SELECT ? as mixed_cjk_emoji'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['mixed_cjk_emoji'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles mixed scripts with ASCII', function (): void {
+            $conn = makeConnection();
+            $str = 'Hello 世界 Привет مرحبا 안녕 World';
+            $stmt = await($conn->prepare('SELECT ? as mixed_scripts'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['mixed_scripts'])->toBe($str);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles long string of CJK characters (1000 chars)', function (): void {
+            $conn = makeConnection();
+            $str = str_repeat('中文字符', 250); 
+            $stmt = await($conn->prepare('SELECT ? as long_cjk'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['long_cjk'])->toBe($str)
+                ->and(mb_strlen($row['long_cjk']))->toBe(1000);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('handles long string of emoji (200 emoji)', function (): void {
+            $conn = makeConnection();
+            $str = str_repeat('🎸', 200); 
+            $stmt = await($conn->prepare('SELECT ? as long_emoji'));
+            $result = await($stmt->execute([$str]));
+            $row = $result->fetchOne();
+
+            expect($row['long_emoji'])->toBe($str)
+                ->and(mb_strlen($row['long_emoji']))->toBe(200);
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('preserves byte length of multibyte strings correctly', function (): void {
+            $conn = makeConnection();
+            $str = '🎸'; 
+            $stmt = await($conn->prepare('SELECT ? as single_emoji, LENGTH(?) as byte_len'));
+            $result = await($stmt->execute([$str, $str]));
+            $row = $result->fetchOne();
+
+            expect($row['single_emoji'])->toBe($str)
+                ->and((int) $row['byte_len'])->toBe(4); 
+
+            await($stmt->close());
+            $conn->close();
+        });
+
+        it('preserves character count of CJK strings correctly', function (): void {
+            $conn = makeConnection();
+            $str = '你好世界'; 
+            $stmt = await($conn->prepare('SELECT ? as cjk, CHAR_LENGTH(?) as char_len, LENGTH(?) as byte_len'));
+            $result = await($stmt->execute([$str, $str, $str]));
+            $row = $result->fetchOne();
+
+            expect($row['cjk'])->toBe($str)
+                ->and((int) $row['char_len'])->toBe(4) 
+                ->and((int) $row['byte_len'])->toBe(12);  
 
             await($stmt->close());
             $conn->close();

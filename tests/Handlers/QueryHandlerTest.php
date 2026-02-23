@@ -126,18 +126,18 @@ describe('QueryHandler', function () {
 
         // Column Definition Packet
         $colReader = Mockery::mock(PayloadReader::class);
-        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 253, 0); 
-        $colReader->shouldReceive('readFixedString')->with(3)->andReturn('def'); 
+        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 253, 0);
+        $colReader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $colReader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('db', 'table', 'orgTable', 'name', 'name');
         $colReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(12);
-        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0); 
+        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0);
         $colReader->shouldReceive('readFixedInteger')->with(4)->andReturn(255);
         $handler->processPacket($colReader, 20, 1);
 
         // INTERMEDIATE EOF PACKET (Ends Column Definitions)
         $intermediateEofReader = Mockery::mock(PayloadReader::class);
         $intermediateEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
         $handler->processPacket($intermediateEofReader, 5, 2);
 
         // Row Packet
@@ -175,7 +175,8 @@ describe('QueryHandler', function () {
 
         $completeCalled = false;
         $streamContext = new StreamContext(
-            onRow: function (array $row) {},
+            onRow: function (array $row) {
+            },
             onComplete: function (StreamStats $stats) use (&$completeCalled) {
                 $completeCalled = true;
             }
@@ -194,18 +195,18 @@ describe('QueryHandler', function () {
 
         // Column Definition Packet
         $colReader = Mockery::mock(PayloadReader::class);
-        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 253, 0); 
+        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 253, 0);
         $colReader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $colReader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('db', 'table', 'orgTable', 'name', 'name');
         $colReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(12);
-        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0); 
-        $colReader->shouldReceive('readFixedInteger')->with(4)->andReturn(255); 
+        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(33, 0, 0);
+        $colReader->shouldReceive('readFixedInteger')->with(4)->andReturn(255);
         $handler->processPacket($colReader, 20, 1);
 
         // INTERMEDIATE EOF PACKET (Ends Column Definitions)
         $intermediateEofReader = Mockery::mock(PayloadReader::class);
         $intermediateEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
         $handler->processPacket($intermediateEofReader, 5, 2);
 
         // Final EOF Packet (Ends empty row set)
@@ -225,7 +226,8 @@ describe('QueryHandler', function () {
 
         $errorCalled = false;
         $streamContext = new StreamContext(
-            onRow: function (array $row) {},
+            onRow: function (array $row) {
+            },
             onError: function (\Throwable $e) use (&$errorCalled) {
                 $errorCalled = true;
             }
@@ -234,7 +236,8 @@ describe('QueryHandler', function () {
         $commandBuilder = new CommandBuilder();
         $handler = new QueryHandler($socket, $commandBuilder);
         $promise = new Promise();
-        $promise->catch(function () {}); 
+        $promise->catch(function () {
+        });
 
         $handler->start('SELECT 1', $promise, $streamContext);
 
@@ -265,23 +268,23 @@ describe('QueryHandler', function () {
 
         // Header Packet
         $headerReader = Mockery::mock(PayloadReader::class);
-        $headerReader->shouldReceive('readFixedInteger')->with(1)->andReturn(1); 
+        $headerReader->shouldReceive('readFixedInteger')->with(1)->andReturn(1);
         $handler->processPacket($headerReader, 1, 0);
 
         // Column Definition Packet
         $colReader = Mockery::mock(PayloadReader::class);
-        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 3, 0); 
-        $colReader->shouldReceive('readFixedString')->with(3)->andReturn('def'); 
+        $colReader->shouldReceive('readFixedInteger')->with(1)->andReturn(3, 3, 0);
+        $colReader->shouldReceive('readFixedString')->with(3)->andReturn('def');
         $colReader->shouldReceive('readLengthEncodedStringOrNull')->andReturn('db', 'table', 'orgTable', 'id', 'id');
         $colReader->shouldReceive('readLengthEncodedIntegerOrNull')->andReturn(12);
-        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 0, 0); 
-        $colReader->shouldReceive('readFixedInteger')->with(4)->andReturn(11); 
+        $colReader->shouldReceive('readFixedInteger')->with(2)->andReturn(63, 0, 0);
+        $colReader->shouldReceive('readFixedInteger')->with(4)->andReturn(11);
         $handler->processPacket($colReader, 20, 1);
 
         // INTERMEDIATE EOF PACKET
         $intermediateEofReader = Mockery::mock(PayloadReader::class);
         $intermediateEofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0); 
+        $intermediateEofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0, 0);
         $handler->processPacket($intermediateEofReader, 5, 2);
 
         // Row 1
