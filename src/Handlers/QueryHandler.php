@@ -12,7 +12,6 @@ use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
-use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
@@ -24,6 +23,8 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\RowOrEofParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\TextRow;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
  * Handles text protocol query execution (COM_QUERY).
@@ -148,6 +149,14 @@ final class QueryHandler
                 $frame->errorMessage
             );
 
+            if ($this->streamContext !== null && $this->streamContext->onError !== null) {
+                try {
+                    ($this->streamContext->onError)($exception);
+                } catch (\Throwable $e) {
+                    // Ignore callback errors
+                }
+            }
+
             $this->currentPromise?->reject($exception);
 
             return;
@@ -209,32 +218,32 @@ final class QueryHandler
 
     private function handleColumn(PayloadReader $reader, int $length, int $seq): void
     {
-        $firstByte = $reader->readFixedInteger(1);
+        $parser = new ColumnDefinitionOrEofParser();
+        $frame = $parser->parse($reader, $length, $seq);
 
-        if ($firstByte === 0xFE && $length < 9) {
-            if ($length > 1) {
-                $reader->readFixedString($length - 1);
-            }
+        if ($frame instanceof EofPacket) {
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
-
             return;
         }
 
-        if ($this->isDraining) {
-            $reader->readRestOfPacketString();
-
+        if ($frame instanceof ErrPacket) {
+            $exception = $this->createExceptionFromError($frame->errorCode, $frame->errorMessage);
+            $this->currentPromise?->reject($exception);
             return;
         }
 
-        $this->readLengthEncodedStringWithFirstByte($reader, (int)$firstByte);
-        $reader->readLengthEncodedStringOrNull();
-        $reader->readLengthEncodedStringOrNull();
-        $reader->readLengthEncodedStringOrNull();
-        $name = $reader->readLengthEncodedStringOrNull();
-        $reader->readRestOfPacketString();
+        if ($frame instanceof ColumnDefinition) {
+            if ($this->isDraining) {
+                return;
+            }
 
-        $this->columns[] = $name ?? 'unknown';
+            $this->columns[] = $frame->name !== '' ? $frame->name : 'unknown';
+            return;
+        }
+
+        $exception = new QueryException('Unexpected packet type in query column definitions', 0);
+        $this->currentPromise?->reject($exception);
     }
 
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
@@ -416,22 +425,6 @@ final class QueryHandler
         }
 
         return new QueryException($message, $errorCode);
-    }
-
-    private function readLengthEncodedStringWithFirstByte(PayloadReader $reader, int $firstByte): ?string
-    {
-        return match ($firstByte) {
-            LengthEncodedType::NULL_MARKER => null,
-            LengthEncodedType::INT16_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(2)),
-            LengthEncodedType::INT24_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(3)),
-            LengthEncodedType::INT64_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(8)),
-            default => $firstByte < LengthEncodedType::NULL_MARKER
-                ? $reader->readFixedString($firstByte)
-                : throw new QueryException(
-                    \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte),
-                    0
-                ),
-        };
     }
 
     private function writePacket(string $payload): void
