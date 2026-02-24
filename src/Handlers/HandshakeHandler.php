@@ -15,7 +15,7 @@ use Rcalicdan\MySQLBinaryProtocol\Auth\AuthScrambler;
 use Rcalicdan\MySQLBinaryProtocol\Buffer\Writer\BufferPayloadWriterFactory;
 use Rcalicdan\MySQLBinaryProtocol\Constants\AuthPacketType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\CapabilityFlags;
-use Rcalicdan\MySQLBinaryProtocol\Constants\CharsetIdentifiers;
+use Rcalicdan\MySQLBinaryProtocol\Constants\CharsetMap;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeResponse41;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Handshake\HandshakeV10;
@@ -39,9 +39,13 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 final class HandshakeHandler
 {
     private string $scramble = '';
+
     private string $authPlugin = '';
+
     private int $serverCapabilities = 0;
+
     private int $sequenceId = 0;
+
     private bool $isSslEnabled = false;
 
     /**
@@ -57,9 +61,7 @@ final class HandshakeHandler
      */
     private bool $compressionNegotiated = false;
 
-    /**
-     *  @var Promise<int> The promise that resolves with the next sequence ID on successful handshake.
-     */
+    /** @var Promise<int> The promise that resolves with the next sequence ID on successful handshake. */
     private Promise $promise;
 
     public function __construct(
@@ -140,14 +142,17 @@ final class HandshakeHandler
 
             $clientCaps = $this->calculateCapabilities();
 
+            // Resolve the charset ID from the string config
+            $charsetId = CharsetMap::getCollationId($this->params->charset);
+
             // Store negotiation result. If both client and server agreed on compression,
-            // it must flag it so the Connection can upgrade the reader/writer later.
+            // we must flag it so the Connection can upgrade the reader/writer later.
             if (($clientCaps & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
                 $this->compressionNegotiated = true;
             }
 
             if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) !== 0) {
-                $this->performSslUpgrade($clientCaps);
+                $this->performSslUpgrade($clientCaps, $charsetId);
             } else {
                 if ($this->params->useSsl() && ($this->serverCapabilities & CapabilityFlags::CLIENT_SSL) === 0) {
                     $this->promise->reject(new ConnectionException('SSL/TLS connection requested but server does not support SSL', 0));
@@ -155,7 +160,7 @@ final class HandshakeHandler
                     return;
                 }
 
-                $this->sendAuthResponse($clientCaps);
+                $this->sendAuthResponse($clientCaps, $charsetId);
             }
         } catch (\Throwable $e) {
             $wrappedException = new ConnectionException('Failed to process initial handshake: ' . $e->getMessage(), (int)$e->getCode(), $e);
@@ -163,13 +168,13 @@ final class HandshakeHandler
         }
     }
 
-    private function performSslUpgrade(int $clientCaps): void
+    private function performSslUpgrade(int $clientCaps, int $charsetId): void
     {
         try {
             $writer = (new BufferPayloadWriterFactory())->create();
             $writer->writeUInt32($clientCaps | CapabilityFlags::CLIENT_SSL);
             $writer->writeUInt32(0x1000000);
-            $writer->writeUInt8(CharsetIdentifiers::UTF8MB4);
+            $writer->writeUInt8($charsetId);
             $writer->writeZeros(23);
 
             $payload = $writer->toString();
@@ -180,15 +185,15 @@ final class HandshakeHandler
             $this->socket->write($packet);
             $this->sequenceId++;
 
-            Loop::setImmediate(function () use ($clientCaps) {
-                $this->configureSslAndEnable($clientCaps);
+            Loop::setImmediate(function () use ($clientCaps, $charsetId) {
+                $this->configureSslAndEnable($clientCaps, $charsetId);
             });
         } catch (\Throwable $e) {
             $this->promise->reject(new ConnectionException('Failed to initiate SSL upgrade: ' . $e->getMessage(), (int)$e->getCode(), $e));
         }
     }
 
-    private function configureSslAndEnable(int $clientCaps): void
+    private function configureSslAndEnable(int $clientCaps, int $charsetId): void
     {
         if (! method_exists($this->socket, 'enableEncryption')) {
             $this->promise->reject(new ConnectionException('Socket does not support SSL/TLS upgrade. MySQL requires STARTTLS capability for encrypted connections.'));
@@ -218,9 +223,9 @@ final class HandshakeHandler
             $encryptionPromise = $this->socket->enableEncryption($sslOptions);
 
             $encryptionPromise->then(
-                function () use ($clientCaps): void {
+                function () use ($clientCaps, $charsetId): void {
                     $this->isSslEnabled = true;
-                    $this->sendAuthResponse($clientCaps);
+                    $this->sendAuthResponse($clientCaps, $charsetId);
                 },
                 function (\Throwable $e): void {
                     $this->promise->reject(new ConnectionException('SSL/TLS handshake failed: ' . $e->getMessage(), 0, $e));
@@ -231,12 +236,12 @@ final class HandshakeHandler
         }
     }
 
-    private function sendAuthResponse(int $clientCaps): void
+    private function sendAuthResponse(int $clientCaps, int $charsetId): void
     {
         try {
             $response = (new HandshakeResponse41())->build(
                 $clientCaps,
-                CharsetIdentifiers::UTF8MB4,
+                $charsetId,
                 $this->params->username,
                 $this->generateAuthResponse($this->authPlugin, $this->scramble),
                 $this->params->database,
@@ -399,7 +404,7 @@ final class HandshakeHandler
         }
 
         // Enable Compression if requested and server supports it
-        if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
+        if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS)) {
             $flags |= CapabilityFlags::CLIENT_COMPRESS;
         }
 

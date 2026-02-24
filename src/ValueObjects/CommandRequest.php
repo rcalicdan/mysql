@@ -21,6 +21,7 @@ final class CommandRequest
     public const string TYPE_CLOSE_STMT = 'close_stmt';
     public const string TYPE_STREAM_QUERY = 'stream_query';
     public const string TYPE_EXECUTE_STREAM = 'execute_stream';
+    public const string TYPE_RESET = 'reset';
 
     /**
      * @param string $type The type of command (one of the TYPE_* constants)
@@ -37,6 +38,5 @@ final class CommandRequest
         public readonly array $params = [],
         public readonly int $statementId = 0,
         public readonly mixed $context = null,
-    ) {
-    }
+    ) {}
 }

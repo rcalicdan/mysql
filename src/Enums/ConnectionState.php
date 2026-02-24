@@ -21,4 +21,6 @@ enum ConnectionState: string
     case PREPARING = 'preparing';
 
     case EXECUTING = 'executing';
+    
+    case RESETTING = 'resetting';
 }

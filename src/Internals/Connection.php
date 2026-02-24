@@ -13,6 +13,7 @@ use Hibla\Mysql\Handlers\HandshakeHandler;
 use Hibla\Mysql\Handlers\PingHandler;
 use Hibla\Mysql\Handlers\PrepareHandler;
 use Hibla\Mysql\Handlers\QueryHandler;
+use Hibla\Mysql\Handlers\ResetHandler;
 use Hibla\Mysql\ValueObjects\CommandRequest;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Mysql\ValueObjects\ExecuteStreamContext;
@@ -56,6 +57,13 @@ use Throwable;
 class Connection
 {
     /**
+     * How long (seconds) to wait for a KILL QUERY to settle before giving up
+     * and proceeding with teardown anyway. Bounds the worst-case shutdown time
+     * when the kill side-channel is slow or unreachable.
+     */
+    private const KILL_TIMEOUT_SECONDS = 3.0;
+
+    /**
      * @var SplQueue<CommandRequest>
      */
     private SplQueue $commandQueue;
@@ -73,6 +81,8 @@ class Connection
     private ?QueryHandler $queryHandler = null;
 
     private ?PingHandler $pingHandler = null;
+
+    private ?ResetHandler $resetHandler = null;
 
     private ?PrepareHandler $prepareHandler = null;
 
@@ -219,7 +229,7 @@ class Connection
         while ($length >= $MAX_PACKET_SIZE) {
             $chunk = substr($payload, $offset, $MAX_PACKET_SIZE);
             $packet = $this->packetWriter->write($chunk, $sequenceId);
-
+            
             $this->socket->write($packet);
 
             $sequenceId++;
@@ -229,7 +239,7 @@ class Connection
 
         $chunk = substr($payload, $offset);
         $packet = $this->packetWriter->write($chunk, $sequenceId);
-
+        
         $this->socket->write($packet);
         $sequenceId++;
     }
@@ -375,6 +385,17 @@ class Connection
     {
         /** @var PromiseInterface<bool> */
         return $this->enqueueCommand(CommandRequest::TYPE_PING);
+    }
+
+    /**
+     * Resets the connection state via COM_RESET_CONNECTION.
+     *
+     * @return PromiseInterface<bool>
+     */
+    public function reset(): PromiseInterface
+    {
+        /** @var PromiseInterface<bool> */
+        return $this->enqueueCommand(CommandRequest::TYPE_RESET);
     }
 
     /**
@@ -527,6 +548,7 @@ class Connection
     ): PromiseInterface {
         if ($this->state === ConnectionState::CLOSED) {
             if ($type === CommandRequest::TYPE_CLOSE_STMT) {
+                // @phpstan-ignore-next-line
                 return Promise::resolved(null);
             }
 
@@ -536,7 +558,6 @@ class Connection
         /** @var Promise<mixed> $promise */
         $promise = new Promise();
 
-        /** @var CommandRequest $command */
         $command = new CommandRequest($type, $promise, $sql, $params, $stmtId, $context);
 
         $this->commandQueue->enqueue($command);
@@ -594,12 +615,10 @@ class Connection
     private function removeFromQueue(CommandRequest $command): bool
     {
         $found = false;
-
         /** @var SplQueue<CommandRequest> $temp */
         $temp = new SplQueue();
 
         while (! $this->commandQueue->isEmpty()) {
-            /** @var CommandRequest $cmd */
             $cmd = $this->commandQueue->dequeue();
 
             if ($cmd === $command) {
@@ -610,7 +629,6 @@ class Connection
         }
 
         while (! $temp->isEmpty()) {
-            /** @var CommandRequest $cmd */
             $cmd = $temp->dequeue();
             $this->commandQueue->enqueue($cmd);
         }
@@ -674,10 +692,8 @@ class Connection
                                     return $killConn->query("KILL QUERY {$threadId}")
                                         ->finally(function () use ($killConn) {
                                             $killConn->close();
-                                        })
-                                    ;
-                                })
-                            ;
+                                        });
+                                });
                         }),
                         $this->params->killTimeoutSeconds
                     );
@@ -753,6 +769,7 @@ class Connection
         $this->prepareHandler = null;
         $this->executeHandler = null;
         $this->pingHandler = null;
+        $this->resetHandler = null;
 
         if ($this->connectPromise !== null) {
             $this->connectPromise->reject(
@@ -769,7 +786,6 @@ class Connection
         }
 
         while (! $this->commandQueue->isEmpty()) {
-            /** @var CommandRequest $cmd */
             $cmd = $this->commandQueue->dequeue();
 
             if ($cmd->type === CommandRequest::TYPE_CLOSE_STMT) {
@@ -819,7 +835,6 @@ class Connection
             return;
         }
 
-        /** @var CommandRequest $command */
         $command = $this->commandQueue->dequeue();
         $this->currentCommand = $command;
 
@@ -858,6 +873,18 @@ class Connection
                     $protocolPromise = new Promise();
                     $this->wireProtocolPromise($protocolPromise, $command);
                     $pingHandler->start($protocolPromise);
+                }
+
+                break;
+
+            case CommandRequest::TYPE_RESET:
+                $this->state = ConnectionState::RESETTING;
+                $resetHandler = $this->resetHandler;
+                if ($resetHandler !== null) {
+                    /** @var Promise<bool> $protocolPromise */
+                    $protocolPromise = new Promise();
+                    $this->wireProtocolPromise($protocolPromise, $command);
+                    $resetHandler->start($protocolPromise);
                 }
 
                 break;
@@ -956,6 +983,7 @@ class Connection
         $this->handshakeHandler = new HandshakeHandler($socket, $this->params);
         $this->queryHandler = new QueryHandler($this, $commandBuilder);
         $this->pingHandler = new PingHandler($this);
+        $this->resetHandler = new ResetHandler($this);
         $this->prepareHandler = new PrepareHandler($this, $commandBuilder);
         $this->executeHandler = new ExecuteHandler($this, $commandBuilder);
 
@@ -1022,6 +1050,7 @@ class Connection
                             ConnectionState::CONNECTING => $this->handshakeHandler?->processPacket($payloadReader, $length, $seq),
                             ConnectionState::QUERYING => $this->queryHandler?->processPacket($payloadReader, $length, $seq),
                             ConnectionState::PINGING => $this->pingHandler?->processPacket($payloadReader, $length, $seq),
+                            ConnectionState::RESETTING => $this->resetHandler?->processPacket($payloadReader, $length, $seq),
                             ConnectionState::PREPARING => $this->prepareHandler?->processPacket($payloadReader, $length, $seq),
                             ConnectionState::EXECUTING => $this->executeHandler?->processPacket($payloadReader, $length, $seq),
                             default => null,
@@ -1080,7 +1109,6 @@ class Connection
         }
 
         while (! $this->commandQueue->isEmpty()) {
-            /** @var CommandRequest $cmd */
             $cmd = $this->commandQueue->dequeue();
             $cmd->promise->reject(new ConnectionException('Connection closed before execution', 0, $e));
         }
