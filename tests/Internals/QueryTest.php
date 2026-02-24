@@ -1472,7 +1472,8 @@ describe('Query (Text Protocol)', function (): void {
 
             expect($row['long_cjk'])->toBe($str)
                 ->and((int) $row['char_len'])->toBe(1000)
-                ->and((int) $row['byte_len'])->toBe(3000);
+                ->and((int) $row['byte_len'])->toBe(3000)
+            ;
 
             $conn->close();
         });
@@ -1485,7 +1486,8 @@ describe('Query (Text Protocol)', function (): void {
 
             expect($row['long_emoji'])->toBe($str)
                 ->and((int) $row['char_len'])->toBe(200)
-                ->and((int) $row['byte_len'])->toBe(800);
+                ->and((int) $row['byte_len'])->toBe(800)
+            ;
 
             $conn->close();
         });
@@ -1496,7 +1498,8 @@ describe('Query (Text Protocol)', function (): void {
             $row = $result->fetchOne();
 
             expect((int) $row['byte_len'])->toBe(4)
-                ->and((int) $row['char_len'])->toBe(1);
+                ->and((int) $row['char_len'])->toBe(1)
+            ;
 
             $conn->close();
         });
@@ -1507,7 +1510,8 @@ describe('Query (Text Protocol)', function (): void {
             $row = $result->fetchOne();
 
             expect((int) $row['byte_len'])->toBe(6)
-                ->and((int) $row['char_len'])->toBe(2);
+                ->and((int) $row['char_len'])->toBe(2)
+            ;
 
             $conn->close();
         });
@@ -1518,7 +1522,8 @@ describe('Query (Text Protocol)', function (): void {
             $row = $result->fetchOne();
 
             expect($row['upper_cyr'])->toBe('ПРИВЕТ')
-                ->and($row['lower_cyr'])->toBe('привет');
+                ->and($row['lower_cyr'])->toBe('привет')
+            ;
 
             $conn->close();
         });
@@ -1529,7 +1534,8 @@ describe('Query (Text Protocol)', function (): void {
             $row = $result->fetchOne();
 
             expect($row['rev_ascii'])->toBe('cba')
-                ->and((int) $row['rev_cjk_len'])->toBe(4);
+                ->and((int) $row['rev_cjk_len'])->toBe(4)
+            ;
 
             $conn->close();
         });
@@ -1555,7 +1561,8 @@ describe('Query (Text Protocol)', function (): void {
 
             expect($row['cjk_prefix'])->toBe('1')
                 ->and($row['emoji_suffix'])->toBe('1')
-                ->and($row['cyrillic_suffix'])->toBe('1');
+                ->and($row['cyrillic_suffix'])->toBe('1')
+            ;
 
             $conn->close();
         });

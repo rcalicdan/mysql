@@ -74,18 +74,21 @@ describe('MysqlClient', function (): void {
         });
 
         it('throws ConfigurationException for invalid maxConnections', function (): void {
-            expect(fn() => makeClient(maxConnections: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(maxConnections: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('throws ConfigurationException for invalid idleTimeout', function (): void {
-            expect(fn() => makeClient(idleTimeout: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(idleTimeout: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('throws ConfigurationException for invalid maxLifetime', function (): void {
-            expect(fn() => makeClient(maxLifetime: 0))
-                ->toThrow(ConfigurationException::class);
+            expect(fn () => makeClient(maxLifetime: 0))
+                ->toThrow(ConfigurationException::class)
+            ;
         });
 
         it('creates a client with statement cache disabled', function (): void {
@@ -606,8 +609,9 @@ describe('MysqlClient', function (): void {
             $client = makeClient();
             $client->close();
 
-            expect(fn() => await($client->query('SELECT 1')))
-                ->toThrow(NotInitializedException::class);
+            expect(fn () => await($client->query('SELECT 1')))
+                ->toThrow(NotInitializedException::class)
+            ;
         });
 
         it('is safe to call close() multiple times', function (): void {
@@ -655,7 +659,8 @@ describe('MysqlClient', function (): void {
 
             expect($result1->fetchOne()['val'])->toBe('1')
                 ->and($result2->fetchOne()['val'])->toBe('2')
-                ->and($result3->fetchOne()['val'])->toBe('3');
+                ->and($result3->fetchOne()['val'])->toBe('3')
+            ;
 
             $client->close();
         });
@@ -766,7 +771,8 @@ describe('MysqlClient', function (): void {
             }
 
             expect($rows)->not->toBeEmpty()
-                ->and($rows[0])->toHaveKey('name');
+                ->and($rows[0])->toHaveKey('name')
+            ;
 
             $client->close();
         });
@@ -828,8 +834,9 @@ describe('MysqlClient', function (): void {
             $client = makeClient();
             $client->close();
 
-            expect(fn() => $client->getStats())
-                ->toThrow(NotInitializedException::class);
+            expect(fn () => $client->getStats())
+                ->toThrow(NotInitializedException::class)
+            ;
         });
     });
 });

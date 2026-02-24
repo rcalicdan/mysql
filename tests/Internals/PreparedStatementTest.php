@@ -1151,7 +1151,7 @@ describe('PreparedStatement', function (): void {
 
         it('handles emoji with skin tone modifier', function (): void {
             $conn = makeConnection();
-            $str = '👋🏽'; 
+            $str = '👋🏽';
             $stmt = await($conn->prepare('SELECT ? as skin_tone_emoji'));
             $result = await($stmt->execute([$str]));
             $row = $result->fetchOne();
@@ -1164,7 +1164,7 @@ describe('PreparedStatement', function (): void {
 
         it('handles emoji family sequence (ZWJ sequence)', function (): void {
             $conn = makeConnection();
-            $str = '👨‍👩‍👧‍👦'; 
+            $str = '👨‍👩‍👧‍👦';
             $stmt = await($conn->prepare('SELECT ? as family_emoji'));
             $result = await($stmt->execute([$str]));
             $row = $result->fetchOne();
@@ -1203,13 +1203,14 @@ describe('PreparedStatement', function (): void {
 
         it('handles long string of CJK characters (1000 chars)', function (): void {
             $conn = makeConnection();
-            $str = str_repeat('中文字符', 250); 
+            $str = str_repeat('中文字符', 250);
             $stmt = await($conn->prepare('SELECT ? as long_cjk'));
             $result = await($stmt->execute([$str]));
             $row = $result->fetchOne();
 
             expect($row['long_cjk'])->toBe($str)
-                ->and(mb_strlen($row['long_cjk']))->toBe(1000);
+                ->and(mb_strlen($row['long_cjk']))->toBe(1000)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -1217,13 +1218,14 @@ describe('PreparedStatement', function (): void {
 
         it('handles long string of emoji (200 emoji)', function (): void {
             $conn = makeConnection();
-            $str = str_repeat('🎸', 200); 
+            $str = str_repeat('🎸', 200);
             $stmt = await($conn->prepare('SELECT ? as long_emoji'));
             $result = await($stmt->execute([$str]));
             $row = $result->fetchOne();
 
             expect($row['long_emoji'])->toBe($str)
-                ->and(mb_strlen($row['long_emoji']))->toBe(200);
+                ->and(mb_strlen($row['long_emoji']))->toBe(200)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -1231,13 +1233,14 @@ describe('PreparedStatement', function (): void {
 
         it('preserves byte length of multibyte strings correctly', function (): void {
             $conn = makeConnection();
-            $str = '🎸'; 
+            $str = '🎸';
             $stmt = await($conn->prepare('SELECT ? as single_emoji, LENGTH(?) as byte_len'));
             $result = await($stmt->execute([$str, $str]));
             $row = $result->fetchOne();
 
             expect($row['single_emoji'])->toBe($str)
-                ->and((int) $row['byte_len'])->toBe(4); 
+                ->and((int) $row['byte_len'])->toBe(4)
+            ;
 
             await($stmt->close());
             $conn->close();
@@ -1245,14 +1248,15 @@ describe('PreparedStatement', function (): void {
 
         it('preserves character count of CJK strings correctly', function (): void {
             $conn = makeConnection();
-            $str = '你好世界'; 
+            $str = '你好世界';
             $stmt = await($conn->prepare('SELECT ? as cjk, CHAR_LENGTH(?) as char_len, LENGTH(?) as byte_len'));
             $result = await($stmt->execute([$str, $str, $str]));
             $row = $result->fetchOne();
 
             expect($row['cjk'])->toBe($str)
-                ->and((int) $row['char_len'])->toBe(4) 
-                ->and((int) $row['byte_len'])->toBe(12);  
+                ->and((int) $row['char_len'])->toBe(4)
+                ->and((int) $row['byte_len'])->toBe(12)
+            ;
 
             await($stmt->close());
             $conn->close();

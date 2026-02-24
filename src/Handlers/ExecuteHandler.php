@@ -154,7 +154,7 @@ final class ExecuteHandler
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
                 warningCount: $frame->warnings,
-                columns: []
+                columnDefinitions: []
             );
             $this->currentPromise?->resolve($result);
 
@@ -300,13 +300,12 @@ final class ExecuteHandler
 
             $this->currentPromise?->resolve($stats);
         } else {
-            $columns = array_map(fn (ColumnDefinition $c) => $c->name, $this->columnDefinitions);
             $result = new Result(
                 rows: $this->rows,
                 affectedRows: 0,
                 lastInsertId: 0,
                 warningCount: $packet->warnings,
-                columns: $columns
+                columnDefinitions: $this->columnDefinitions
             );
             $this->currentPromise?->resolve($result);
         }

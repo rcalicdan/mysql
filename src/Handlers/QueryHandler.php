@@ -61,7 +61,7 @@ final class QueryHandler
     private ?Promise $currentPromise = null;
 
     /**
-     *  @var array<int, string>
+     *  @var array<int, ColumnDefinition>
      */
     private array $columns = [];
 
@@ -169,7 +169,7 @@ final class QueryHandler
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
                 warningCount: $frame->warnings,
-                columns: []
+                columnDefinitions: []
             );
 
             if ($this->hasMoreResults($frame->statusFlags)) {
@@ -244,7 +244,7 @@ final class QueryHandler
                 return;
             }
 
-            $this->columns[] = $frame->name !== '' ? $frame->name : 'unknown';
+            $this->columns[] = $frame;
 
             return;
         }
@@ -321,7 +321,7 @@ final class QueryHandler
                 affectedRows: 0,
                 lastInsertId: 0,
                 warningCount: $packet->warnings,
-                columns: $this->columns
+                columnDefinitions: $this->columns
             );
             $currentResult = $result;
             $currentStats = null;
@@ -378,7 +378,9 @@ final class QueryHandler
         $nameCounts = [];
 
         foreach ($row->values as $index => $value) {
-            $colName = $this->columns[(int)$index] ?? (string)$index;
+            $colName = isset($this->columns[(int)$index])
+                ? $this->columns[(int)$index]->name
+                : (string)$index;
 
             if (isset($nameCounts[$colName])) {
                 $suffix = $nameCounts[$colName]++;

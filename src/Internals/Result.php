@@ -5,40 +5,72 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Internals;
 
 use Hibla\Mysql\Interfaces\MysqlResult;
+use Hibla\Mysql\ValueObjects\MysqlColumnDefinition;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 
 /**
- * Unified result object for all query types (SELECT, INSERT, UPDATE, DELETE, etc.).
+ * Unified result object for all query types.
  *
- * This object contains both row data (for SELECT queries) and execution metadata
- * (for INSERT/UPDATE/DELETE). Methods gracefully handle both cases:
- * - For SELECT: rows are populated, affectedRows is 0
- * - For INSERT/UPDATE/DELETE: rows are empty, affectedRows > 0
- * - For commands like SET: both are typically 0/empty
- *
- * @internal This must not be use diretly.
+ * @internal This must not be used directly.
  */
 class Result implements MysqlResult
 {
     private int $position = 0;
+
     private readonly int $numRows;
+
     private readonly int $columnCount;
 
     /**
-     * @param array<int, array<string, mixed>> $rows Result rows (empty for non-SELECT queries)
-     * @param int $affectedRows Number of rows affected (0 for SELECT queries)
-     * @param int $lastInsertId Last auto-increment ID (0 if not applicable)
-     * @param int $warningCount Number of warnings generated
-     * @param array<int, string> $columns Column names from result set
+     *  @var array<int, string>
+     */
+    private readonly array $columnNames;
+
+    /**
+     *  @var array<int, MysqlColumnDefinition>
+     */
+    private readonly array $resolvedColumns;
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, ColumnDefinition> $columnDefinitions
      */
     public function __construct(
         private readonly array $rows = [],
         private readonly int $affectedRows = 0,
         private readonly int $lastInsertId = 0,
         private readonly int $warningCount = 0,
-        private readonly array $columns = []
+        private readonly array $columnDefinitions = []
     ) {
         $this->numRows = \count($this->rows);
-        $this->columnCount = $this->numRows > 0 ? \count($this->rows[0]) : \count($this->columns);
+
+        $this->resolvedColumns = array_map(
+            fn (ColumnDefinition $col) => new MysqlColumnDefinition($col),
+            $this->columnDefinitions
+        );
+
+        $this->columnNames = array_map(
+            fn (MysqlColumnDefinition $col) => $col->name,
+            $this->resolvedColumns
+        );
+
+        $this->columnCount = \count($this->columnNames);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getFields(): array
+    {
+        return $this->resolvedColumns;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getColumns(): array
+    {
+        return $this->columnNames;
     }
 
     /**
@@ -132,14 +164,6 @@ class Result implements MysqlResult
     public function getColumnCount(): int
     {
         return $this->columnCount;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function getColumns(): array
-    {
-        return $this->columns;
     }
 
     /**

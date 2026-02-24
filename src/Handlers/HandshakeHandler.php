@@ -392,8 +392,7 @@ final class HandshakeHandler
             CapabilityFlags::CLIENT_MULTI_RESULTS |
             CapabilityFlags::CLIENT_PS_MULTI_RESULTS |
             CapabilityFlags::CLIENT_CONNECT_WITH_DB |
-            CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
-            CapabilityFlags::CLIENT_LOCAL_FILES;
+            CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA;
 
         if ($this->params->useSsl()) {
             $flags |= CapabilityFlags::CLIENT_SSL;

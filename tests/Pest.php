@@ -157,8 +157,8 @@ function makeCompressedClient(
     bool $enableStatementCache = true
 ): MysqlClient {
     $params = ConnectionParams::fromArray([
-        'host'     => $_ENV['MYSQL_HOST']     ?? '127.0.0.1',
-        'port'     => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+        'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+        'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
         'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
         'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
