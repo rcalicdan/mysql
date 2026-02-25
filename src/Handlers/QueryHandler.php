@@ -5,23 +5,24 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\Mysql\Enums\ParserState;
+use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
-use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
-use Rcalicdan\MySQLBinaryProtocol\Constants\LengthEncodedType;
 use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\EofPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\RowOrEofParser;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\TextRow;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
@@ -60,7 +61,7 @@ final class QueryHandler
     private ?Promise $currentPromise = null;
 
     /**
-     *  @var array<int, string>
+     *  @var array<int, ColumnDefinition>
      */
     private array $columns = [];
 
@@ -70,7 +71,7 @@ final class QueryHandler
     private array $rows = [];
 
     public function __construct(
-        private readonly SocketConnection $socket,
+        private readonly Connection $connection,
         private readonly CommandBuilder $commandBuilder
     ) {
         $this->responseParser = new ResponseParser();
@@ -96,7 +97,8 @@ final class QueryHandler
         $this->isDraining = false;
 
         $packet = $this->commandBuilder->buildQuery($sql);
-        $this->writePacket($packet);
+
+        $this->connection->writePacket($packet, $this->sequenceId);
     }
 
     public function processPacket(PayloadReader $reader, int $length, int $seq): void
@@ -148,6 +150,14 @@ final class QueryHandler
                 $frame->errorMessage
             );
 
+            if ($this->streamContext !== null && $this->streamContext->onError !== null) {
+                try {
+                    ($this->streamContext->onError)($exception);
+                } catch (\Throwable $e) {
+                    // Ignore callback errors
+                }
+            }
+
             $this->currentPromise?->reject($exception);
 
             return;
@@ -159,7 +169,8 @@ final class QueryHandler
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
                 warningCount: $frame->warnings,
-                columns: []
+                columnDefinitions: [],
+                connectionId: $this->connection->getThreadId()
             );
 
             if ($this->hasMoreResults($frame->statusFlags)) {
@@ -209,32 +220,41 @@ final class QueryHandler
 
     private function handleColumn(PayloadReader $reader, int $length, int $seq): void
     {
-        $firstByte = $reader->readFixedInteger(1);
+        $parser = new ColumnDefinitionOrEofParser();
+        $frame = $parser->parse($reader, $length, $seq);
 
-        if ($firstByte === 0xFE && $length < 9) {
-            if ($length > 1) {
-                $reader->readFixedString($length - 1);
-            }
+        if ($frame instanceof EofPacket) {
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
 
             return;
         }
 
-        if ($this->isDraining) {
-            $reader->readRestOfPacketString();
+        if ($frame instanceof ErrPacket) {
+            $exception = $this->createExceptionFromError(
+                $frame->errorCode,
+                $frame->errorMessage
+            );
+            $this->currentPromise?->reject($exception);
 
             return;
         }
 
-        $this->readLengthEncodedStringWithFirstByte($reader, (int)$firstByte);
-        $reader->readLengthEncodedStringOrNull();
-        $reader->readLengthEncodedStringOrNull();
-        $reader->readLengthEncodedStringOrNull();
-        $name = $reader->readLengthEncodedStringOrNull();
-        $reader->readRestOfPacketString();
+        if ($frame instanceof ColumnDefinition) {
+            if ($this->isDraining) {
+                return;
+            }
 
-        $this->columns[] = $name ?? 'unknown';
+            $this->columns[] = $frame;
+
+            return;
+        }
+
+        $exception = new QueryException(
+            'Unexpected packet type in query column definitions',
+            0
+        );
+        $this->currentPromise?->reject($exception);
     }
 
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
@@ -292,7 +312,8 @@ final class QueryHandler
                 rowCount: $this->streamedRowCount,
                 columnCount: \count($this->columns),
                 duration: $duration,
-                warningCount: $packet->warnings
+                warningCount: $packet->warnings,
+                connectionId: $this->connection->getThreadId()
             );
             $currentResult = null;
             $currentStats = $stats;
@@ -302,7 +323,8 @@ final class QueryHandler
                 affectedRows: 0,
                 lastInsertId: 0,
                 warningCount: $packet->warnings,
-                columns: $this->columns
+                columnDefinitions: $this->columns,
+                connectionId: $this->connection->getThreadId()
             );
             $currentResult = $result;
             $currentStats = null;
@@ -359,7 +381,9 @@ final class QueryHandler
         $nameCounts = [];
 
         foreach ($row->values as $index => $value) {
-            $colName = $this->columns[(int)$index] ?? (string)$index;
+            $colName = isset($this->columns[(int)$index])
+                ? $this->columns[(int)$index]->name
+                : (string)$index;
 
             if (isset($nameCounts[$colName])) {
                 $suffix = $nameCounts[$colName]++;
@@ -416,42 +440,5 @@ final class QueryHandler
         }
 
         return new QueryException($message, $errorCode);
-    }
-
-    private function readLengthEncodedStringWithFirstByte(PayloadReader $reader, int $firstByte): ?string
-    {
-        return match ($firstByte) {
-            LengthEncodedType::NULL_MARKER => null,
-            LengthEncodedType::INT16_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(2)),
-            LengthEncodedType::INT24_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(3)),
-            LengthEncodedType::INT64_LENGTH => $reader->readFixedString((int)$reader->readFixedInteger(8)),
-            default => $firstByte < LengthEncodedType::NULL_MARKER
-                ? $reader->readFixedString($firstByte)
-                : throw new QueryException(
-                    \sprintf('Invalid length-encoded string marker: 0x%02X', $firstByte),
-                    0
-                ),
-        };
-    }
-
-    private function writePacket(string $payload): void
-    {
-        $MAX_PACKET_SIZE = 16777215;
-        $length = \strlen($payload);
-        $offset = 0;
-
-        // If payload is larger than 16MB, split it
-        while ($length >= $MAX_PACKET_SIZE) {
-            $header = "\xFF\xFF\xFF" . \chr($this->sequenceId);
-            $this->socket->write($header . substr($payload, $offset, $MAX_PACKET_SIZE));
-
-            $this->sequenceId++;
-            $length -= $MAX_PACKET_SIZE;
-            $offset += $MAX_PACKET_SIZE;
-        }
-
-        $header = substr(pack('V', $length), 0, 3) . \chr($this->sequenceId);
-        $this->socket->write($header . substr($payload, $offset));
-        $this->sequenceId++;
     }
 }

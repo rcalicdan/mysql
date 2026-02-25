@@ -10,10 +10,6 @@ enum ConnectionState: string
 
     case CONNECTING = 'connecting';
 
-    case HANDSHAKING = 'handshaking';
-
-    case AUTHENTICATING = 'authenticating';
-
     case READY = 'ready';
 
     case QUERYING = 'querying';
@@ -25,4 +21,6 @@ enum ConnectionState: string
     case PREPARING = 'preparing';
 
     case EXECUTING = 'executing';
+
+    case RESETTING = 'resetting';
 }

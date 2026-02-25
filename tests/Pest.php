@@ -149,6 +149,32 @@ function makeConcurrentClient(int $maxConnections = 10): MysqlClient
     );
 }
 
+function makeCompressedClient(
+    int $maxConnections = 5,
+    int $idleTimeout = 300,
+    int $maxLifetime = 3600,
+    int $statementCacheSize = 256,
+    bool $enableStatementCache = true
+): MysqlClient {
+    $params = ConnectionParams::fromArray([
+        'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+        'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+        'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
+        'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
+        'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+        'compress' => true,
+    ]);
+
+    return new MysqlClient(
+        $params,
+        $maxConnections,
+        $idleTimeout,
+        $maxLifetime,
+        $statementCacheSize,
+        $enableStatementCache
+    );
+}
+
 function twentyRowSql(): string
 {
     return '
@@ -177,4 +203,43 @@ function twentyRowPreparedSql(): string
             ) numbers
             ORDER BY n
         ';
+}
+
+function makeResettableConnection(): Connection
+{
+    $params = ConnectionParams::fromArray([
+        'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+        'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+        'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
+        'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
+        'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+        'reset_connection' => true,
+        'enable_server_side_cancellation' => false,
+    ]);
+
+    return await(Connection::create($params));
+}
+
+function makeNoResetClient(int $maxConnections = 1): MysqlClient
+{
+    return new MysqlClient(
+        testConnectionParams(),
+        $maxConnections
+    );
+}
+
+function makeResetClient(int $maxConnections = 1): MysqlClient
+{
+    return new MysqlClient(
+        [
+            'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+            'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+            'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
+            'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
+            'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+            'reset_connection' => true,
+            'enable_server_side_cancellation' => false,
+        ],
+        $maxConnections
+    );
 }

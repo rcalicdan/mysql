@@ -1009,4 +1009,175 @@ describe('Connection', function (): void {
             $conn->close();
         });
     });
+
+    describe('Large Packet Splitting', function (): void {
+
+        it('round-trips a 20MB payload via prepared statement (packet split/reassembly)', function (): void {
+            $conn = makeConnection();
+
+            $serverLimit = await($conn->query("SHOW VARIABLES LIKE 'max_allowed_packet'"))
+                ->fetchOne()['Value']
+            ;
+
+            $targetSize = 20 * 1024 * 1024;
+
+            if ((int) $serverLimit < $targetSize) {
+                $conn->close();
+                $this->markTestSkipped(
+                    'Server max_allowed_packet (' . number_format((int) $serverLimit / 1024 / 1024, 2) . 'MB) ' .
+                        'is too small for this test. Increase it in my.cnf to at least 20MB.'
+                );
+            }
+
+            $chunk = '0123456789ABCDEF';
+            $data = str_repeat($chunk, (int) ($targetSize / strlen($chunk)));
+            $data[0] = 'S';
+            $data[$targetSize - 1] = 'E';
+
+            $stmt = await($conn->prepare('SELECT ? as big_data'));
+            $result = await($stmt->execute([$data]));
+            $returned = $result->fetchOne()['big_data'];
+
+            expect(strlen($returned))->toBe($targetSize)
+                ->and($returned[0])->toBe('S')
+                ->and($returned[$targetSize - 1])->toBe('E')
+                ->and(md5($returned))->toBe(md5($data))
+            ;
+
+            await($stmt->close());
+            $conn->close();
+        });
+    });
+
+    describe('Connection Reset (COM_RESET_CONNECTION)', function (): void {
+
+        it('reset() returns true', function (): void {
+            $conn = makeResettableConnection();
+
+            expect(await($conn->reset()))->toBeTrue();
+
+            $conn->close();
+        });
+
+        it('clears session variables after reset', function (): void {
+            $conn = makeResettableConnection();
+
+            await($conn->query("SET @my_var = 'hello'"));
+
+            $before = await($conn->query('SELECT @my_var AS val'));
+            expect($before->fetchOne()['val'])->toBe('hello');
+
+            await($conn->reset());
+
+            $after = await($conn->query('SELECT @my_var AS val'));
+            expect($after->fetchOne()['val'])->toBeNull();
+
+            $conn->close();
+        });
+
+        it('clears multiple session variables after reset', function (): void {
+            $conn = makeResettableConnection();
+
+            await($conn->query('SET @a = 1, @b = 2, @c = 3'));
+
+            await($conn->reset());
+
+            $result = await($conn->query('SELECT @a AS a, @b AS b, @c AS c'));
+            $row = $result->fetchOne();
+
+            expect($row['a'])->toBeNull()
+                ->and($row['b'])->toBeNull()
+                ->and($row['c'])->toBeNull()
+            ;
+
+            $conn->close();
+        });
+
+        it('clears prepared statements after reset', function (): void {
+            $conn = makeResettableConnection();
+
+            $stmt = await($conn->prepare('SELECT ? AS val'));
+
+            await($conn->reset());
+
+            $error = null;
+
+            try {
+                await($stmt->execute([1]));
+            } catch (Throwable $e) {
+                $error = $e;
+            } finally {
+                try {
+                    await($stmt->close());
+                } catch (Throwable) {
+                    //
+                }
+            }
+
+            expect($error)->toBeInstanceOf(Throwable::class)
+                ->and($error?->getMessage())->toContain('Unknown prepared statement handler')
+            ;
+
+            $conn->close();
+        });
+
+        it('connection is still usable after reset', function (): void {
+            $conn = makeResettableConnection();
+
+            await($conn->reset());
+
+            $result = await($conn->query('SELECT 1 AS val'));
+            expect($result->fetchOne()['val'])->toBe('1');
+
+            $conn->close();
+        });
+
+        it('returns to READY state after reset', function (): void {
+            $conn = makeResettableConnection();
+
+            await($conn->reset());
+
+            expect($conn->getState()->name)->toBe('READY');
+
+            $conn->close();
+        });
+
+        it('clears session state but preserves the connection across multiple resets', function (): void {
+            $conn = makeResettableConnection();
+
+            for ($i = 1; $i <= 3; $i++) {
+                await($conn->query("SET @val = {$i}"));
+                $before = await($conn->query('SELECT @val AS v'));
+                expect($before->fetchOne()['v'])->toBe((string) $i);
+
+                await($conn->reset());
+
+                $after = await($conn->query('SELECT @val AS v'));
+                expect($after->fetchOne()['v'])->toBeNull();
+            }
+
+            expect($conn->getState()->name)->toBe('READY');
+
+            $conn->close();
+        });
+
+        it('does not affect other connections when one resets', function (): void {
+            $conn1 = makeResettableConnection();
+            $conn2 = makeResettableConnection();
+
+            await($conn1->query("SET @shared = 'conn1_value'"));
+            await($conn2->query("SET @shared = 'conn2_value'"));
+
+            await($conn1->reset());
+
+            $r1 = await($conn1->query('SELECT @shared AS v'));
+            expect($r1->fetchOne()['v'])->toBeNull();
+
+            $r2 = await($conn2->query('SELECT @shared AS v'));
+            expect($r2->fetchOne()['v'])->toBe('conn2_value');
+
+            $conn1->close();
+            $conn2->close();
+        });
+    });
 });

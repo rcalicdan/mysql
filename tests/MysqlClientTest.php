@@ -630,6 +630,193 @@ describe('MysqlClient', function (): void {
         });
     });
 
+    describe('Compression', function (): void {
+
+        it('executes a plain SELECT over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+            $result = await($client->query('SELECT 1 AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('1');
+
+            $client->close();
+        });
+
+        it('executes a SELECT with params over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+            $result = await($client->query('SELECT ? AS val', [42]));
+
+            expect($result->fetchOne()['val'])->toBe(42);
+
+            $client->close();
+        });
+
+        it('executes multiple sequential queries over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+
+            $result1 = await($client->query('SELECT 1 AS val'));
+            $result2 = await($client->query('SELECT 2 AS val'));
+            $result3 = await($client->query('SELECT 3 AS val'));
+
+            expect($result1->fetchOne()['val'])->toBe('1')
+                ->and($result2->fetchOne()['val'])->toBe('2')
+                ->and($result3->fetchOne()['val'])->toBe('3')
+            ;
+
+            $client->close();
+        });
+
+        it('reports compression_enabled true in stats when compress is requested and server supports it', function (): void {
+            $client = makeCompressedClient();
+
+            await($client->query('SELECT 1'));
+
+            $stats = $client->getStats();
+
+            expect($stats['compression_enabled'])->toBeTrue();
+
+            $client->close();
+        });
+
+        it('reports compression_enabled false in stats for uncompressed client', function (): void {
+            $client = makeClient();
+
+            await($client->query('SELECT 1'));
+
+            $stats = $client->getStats();
+
+            expect($stats['compression_enabled'])->toBeFalse();
+
+            $client->close();
+        });
+
+        it('executes INSERT and DELETE over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+
+            $affectedRows = await($client->execute(
+                "INSERT INTO mysql_client_test (name) VALUES ('compression_test')"
+            ));
+
+            expect($affectedRows)->toBe(1);
+
+            $deleted = await($client->execute(
+                "DELETE FROM mysql_client_test WHERE name = 'compression_test'"
+            ));
+
+            expect($deleted)->toBe(1);
+
+            $client->close();
+        });
+
+        it('executes INSERT and DELETE with params over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+
+            $affectedRows = await($client->execute(
+                'INSERT INTO mysql_client_test (name) VALUES (?)',
+                ['compression_param_test']
+            ));
+
+            expect($affectedRows)->toBe(1);
+
+            $deleted = await($client->execute(
+                'DELETE FROM mysql_client_test WHERE name = ?',
+                ['compression_param_test']
+            ));
+
+            expect($deleted)->toBe(1);
+
+            $client->close();
+        });
+
+        it('handles large payload over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+
+            // Generate a large compressible string well above the 50-byte threshold
+            $largeValue = str_repeat('ABCDEFGHIJ', 100);
+
+            $insertId = await($client->executeGetId(
+                'INSERT INTO mysql_client_test (name) VALUES (?)',
+                [substr($largeValue, 0, 100)] // VARCHAR(100) limit
+            ));
+
+            expect($insertId)->toBeGreaterThan(0);
+
+            await($client->execute(
+                'DELETE FROM mysql_client_test WHERE id = ?',
+                [$insertId]
+            ));
+
+            $client->close();
+        });
+
+        it('fetches a large result set over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+
+            $result = await($client->query("SHOW VARIABLES LIKE '%buffer%'"));
+
+            expect($result->rowCount())->toBeGreaterThanOrEqual(1);
+
+            $client->close();
+        });
+
+        it('streams rows over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+            $stream = await($client->stream(
+                'SELECT name FROM mysql_client_test WHERE id > ? LIMIT 3',
+                [0]
+            ));
+
+            $rows = [];
+            foreach ($stream as $row) {
+                $rows[] = $row;
+            }
+
+            expect($rows)->not->toBeEmpty()
+                ->and($rows[0])->toHaveKey('name')
+            ;
+
+            $client->close();
+        });
+
+        it('releases connection back to pool after compressed query', function (): void {
+            $client = makeCompressedClient(maxConnections: 1);
+
+            await($client->query('SELECT 1'));
+            await($client->query('SELECT 2'));
+
+            // Second query would deadlock if connection was not returned to the pool
+            expect($client->getStats()['pooled_connections'])->toBe(1);
+
+            $client->close();
+        });
+
+        it('releases connection back to pool after failed compressed query', function (): void {
+            $client = makeCompressedClient(maxConnections: 1);
+
+            try {
+                await($client->query('SELECT * FROM non_existent_table_xyz'));
+            } catch (Throwable) {
+                // expected
+            }
+
+            $result = await($client->query('SELECT 1 AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('1');
+
+            $client->close();
+        });
+
+        it('executes prepared statement over a compressed connection', function (): void {
+            $client = makeCompressedClient();
+            $stmt = await($client->prepare('SELECT ? AS val'));
+            $result = await($stmt->execute([99]));
+
+            expect($result->fetchOne()['val'])->toBe(99);
+
+            await($stmt->close());
+            $client->close();
+        });
+    });
+
     describe('Destructor', function (): void {
 
         it('automatically closes when unset', function (): void {
@@ -650,6 +837,100 @@ describe('MysqlClient', function (): void {
             expect(fn () => $client->getStats())
                 ->toThrow(NotInitializedException::class)
             ;
+        });
+    });
+
+    describe('Connection Reset', function (): void {
+
+        it('demonstrates state leakage without reset_connection', function (): void {
+            $client = makeNoResetClient(maxConnections: 1);
+
+            await($client->query("SET @leak_var = 'I_AM_A_LEAKED_VARIABLE'"));
+
+            $result = await($client->query('SELECT @leak_var AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('I_AM_A_LEAKED_VARIABLE');
+
+            $client->close();
+        });
+
+        it('clears session variables between pool reuses with reset_connection enabled', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            await($client->query("SET @my_var = 'I_SHOULD_BE_DELETED'"));
+
+            $result = await($client->query('SELECT @my_var AS val'));
+
+            expect($result->fetchOne()['val'])->toBeNull();
+
+            $client->close();
+        });
+
+        it('clears multiple session variables between pool reuses', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            await($client->query('SET @a = 1, @b = 2, @c = 3'));
+
+            $result = await($client->query('SELECT @a AS a, @b AS b, @c AS c'));
+            $row = $result->fetchOne();
+
+            expect($row['a'])->toBeNull()
+                ->and($row['b'])->toBeNull()
+                ->and($row['c'])->toBeNull()
+            ;
+
+            $client->close();
+        });
+
+        it('handles prepared statement cache invalidation after reset', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            $result1 = await($client->query('SELECT ? AS num', [100]));
+            expect($result1->fetchOne()['num'])->toBe(100);
+
+            $result2 = await($client->query('SELECT ? AS num', [200]));
+            expect($result2->fetchOne()['num'])->toBe(200);
+
+            $client->close();
+        });
+
+        it('state does not leak across multiple pool reuses', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            for ($i = 1; $i <= 5; $i++) {
+                await($client->query("SET @counter = {$i}"));
+
+                $result = await($client->query('SELECT @counter AS val'));
+                expect($result->fetchOne()['val'])->toBeNull();
+            }
+
+            $client->close();
+        });
+
+        it('does not leak state between different logical requests on a shared pool', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            $tx = await($client->beginTransaction());
+            await($tx->query("SET @request_id = 'request_A'"));
+            $resultA = await($tx->query('SELECT @request_id AS val'));
+            expect($resultA->fetchOne()['val'])->toBe('request_A');
+            await($tx->commit());
+
+            $resultB = await($client->query('SELECT @request_id AS val'));
+            expect($resultB->fetchOne()['val'])->toBeNull();
+
+            $client->close();
+        });
+
+        it('connection remains healthy and reusable across multiple resets', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            for ($i = 1; $i <= 5; $i++) {
+                $result = await($client->query('SELECT ? AS val', [$i]));
+                expect($result->fetchOne()['val'])->toBe($i);
+            }
+
+            $client->close();
         });
     });
 });

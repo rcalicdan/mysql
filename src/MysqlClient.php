@@ -72,13 +72,15 @@ final class MysqlClient implements SqlClientInterface
 
     private bool $enableStatementCache;
 
+    private bool $resetConnectionEnabled = false;
+
     /**
      * Creates a new independent MysqlClient instance.
      *
      * Each instance manages its own connection pool and is completely
      * independent from other instances, allowing true multi-database support.
      *
-     * @param ConnectionParams|array<string, mixed>|string $config              Database configuration.
+     * @param ConnectionParams|array<string, mixed>|string $config Database configuration.
      * @param int  $maxConnections       Maximum number of connections in the pool.
      * @param int  $idleTimeout          Seconds a connection can remain idle before being closed.
      * @param int  $maxLifetime          Maximum seconds a connection can live before being rotated.
@@ -86,21 +88,9 @@ final class MysqlClient implements SqlClientInterface
      * @param bool $enableStatementCache Whether to enable prepared statement caching. Defaults to true.
      * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY to the server when a
      *                                      query promise is cancelled. Defaults to true.
-     *
-     *                                      When TRUE: cancelling a promise opens a side-channel TCP
-     *                                      connection and sends KILL QUERY <threadId>. The server
-     *                                      stops the query immediately, releasing locks and returning
-     *                                      the connection to the pool as fast as possible.
-     *
-     *                                      When FALSE: cancelling a promise only transitions the
-     *                                      promise to the cancelled state. The server-side query runs
-     *                                      to completion. The connection remains unavailable until
-     *                                      the query finishes naturally. No side-channel connection
-     *                                      is opened.
-     *
-     *                                      This is an explicit opt-out. Setting this to FALSE means
-     *                                      accepting that cancelled queries will hold their locks and
-     *                                      occupy a connection slot until the server finishes them.
+     * @param bool $resetConnection      Whether to issue COM_RESET_CONNECTION before returning
+     *                                      connections to the pool. Clears all session state, variables,
+     *                                      and prepared statements. Defaults to false.
      *
      * @throws ConfigurationException If configuration is invalid.
      */
@@ -112,8 +102,19 @@ final class MysqlClient implements SqlClientInterface
         int $statementCacheSize = 256,
         bool $enableStatementCache = true,
         bool $enableServerSideCancellation = true,
+        bool $resetConnection = false,
     ) {
         try {
+            // Ensure the resetConnection parameter is passed along if the config is an array or string
+            if (\is_array($config)) {
+                $config['reset_connection'] ??= $resetConnection;
+            } elseif (\is_string($config)) {
+                $separator = str_contains($config, '?') ? '&' : '?';
+                if (! str_contains($config, 'reset_connection=')) {
+                    $config .= $separator . 'reset_connection=' . ($resetConnection ? 'true' : 'false');
+                }
+            }
+
             $this->pool = new PoolManager(
                 $config,
                 $maxConnections,
@@ -121,6 +122,9 @@ final class MysqlClient implements SqlClientInterface
                 $maxLifetime,
                 enableServerSideCancellation: $enableServerSideCancellation,
             );
+
+            // Cache the resolved setting from the pool to avoid array lookups on every query
+            $this->resetConnectionEnabled = (bool) ($this->pool->getStats()['reset_connection_enabled'] ?? false);
             $this->statementCacheSize = $statementCacheSize;
             $this->enableStatementCache = $enableStatementCache;
 
@@ -149,7 +153,7 @@ final class MysqlClient implements SqlClientInterface
         $connection = null;
 
         return $this->withCancellation(
-            $pool->get()
+            $this->borrowConnection()
                 ->then(function (Connection $conn) use ($sql, $pool, &$connection) {
                     $connection = $conn;
 
@@ -184,7 +188,7 @@ final class MysqlClient implements SqlClientInterface
         $connection = null;
 
         return $this->withCancellation(
-            $pool->get()
+            $this->borrowConnection()
                 ->then(function (Connection $conn) use ($sql, $params, &$connection) {
                     $connection = $conn;
 
@@ -317,7 +321,7 @@ final class MysqlClient implements SqlClientInterface
         };
 
         return $this->withCancellation(
-            $pool->get()
+            $this->borrowConnection()
                 ->then(function (Connection $conn) use ($sql, $params, $bufferSize, $pool, $state) {
                     $state->connection = $conn;
 
@@ -379,17 +383,21 @@ final class MysqlClient implements SqlClientInterface
         $connection = null;
 
         return $this->withCancellation(
-            $pool->get()
+            $this->borrowConnection()
                 ->then(function (Connection $conn) use ($isolationLevel, $pool, &$connection) {
                     $connection = $conn;
+
+                    // Get the cache for this specific connection, if any
+                    $cache = $this->getCacheForConnection($conn);
 
                     $promise = $isolationLevel !== null
                         ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
                         ->then(fn () => $conn->query('START TRANSACTION'))
                         : $conn->query('START TRANSACTION');
 
-                    return $promise->then(function () use ($conn, $pool) {
-                        return new Transaction($conn, $pool);
+                    return $promise->then(function () use ($conn, $pool, $cache) {
+                        // Pass the cache to the Transaction
+                        return new Transaction($conn, $pool, $cache);
                     });
                 })
                 ->catch(function (\Throwable $e) use ($pool, &$connection) {
@@ -528,6 +536,29 @@ final class MysqlClient implements SqlClientInterface
     }
 
     /**
+     * Borrows a connection from the pool and handles cache invalidation.
+     *
+     * If COM_RESET_CONNECTION is enabled, the server automatically drops all
+     * prepared statements upon the connection being returned to the pool. We
+     * must clear the local statement cache for this specific connection upon
+     * checkout to ensure we don't attempt to execute a dropped statement ID.
+     *
+     * @return PromiseInterface<Connection>
+     */
+    private function borrowConnection(): PromiseInterface
+    {
+        $pool = $this->getPool();
+
+        return $pool->get()->then(function (Connection $conn) {
+            if ($this->resetConnectionEnabled && $this->statementCaches !== null) {
+                $this->statementCaches->offsetUnset($conn);
+            }
+
+            return $conn;
+        });
+    }
+
+    /**
      * Bridges cancel() → cancelChain() on a public-facing promise.
      *
      * Public methods return the LEAF of a promise chain. When a user calls
@@ -552,6 +583,23 @@ final class MysqlClient implements SqlClientInterface
     }
 
     /**
+     * Helper to retrieve or create the statement cache for a specific connection.
+     * Returns null if caching is disabled.
+     */
+    private function getCacheForConnection(Connection $conn): ?ArrayCache
+    {
+        if (! $this->enableStatementCache || $this->statementCaches === null) {
+            return null;
+        }
+
+        if (! $this->statementCaches->offsetExists($conn)) {
+            $this->statementCaches->offsetSet($conn, new ArrayCache($this->statementCacheSize));
+        }
+
+        return $this->statementCaches->offsetGet($conn);
+    }
+
+    /**
      * Gets a prepared statement from cache or prepares and caches a new one.
      *
      * @param Connection $conn
@@ -560,18 +608,11 @@ final class MysqlClient implements SqlClientInterface
      */
     private function getCachedStatement(Connection $conn, string $sql): PromiseInterface
     {
-        $caches = $this->statementCaches;
+        $cache = $this->getCacheForConnection($conn);
 
-        if ($caches === null) {
+        if ($cache === null) {
             return $conn->prepare($sql);
         }
-
-        if (! $caches->offsetExists($conn)) {
-            $caches->offsetSet($conn, new ArrayCache($this->statementCacheSize));
-        }
-
-        /** @var ArrayCache $cache */
-        $cache = $caches->offsetGet($conn);
 
         /** @var PromiseInterface<mixed> $cachePromise */
         $cachePromise = $cache->get($sql);

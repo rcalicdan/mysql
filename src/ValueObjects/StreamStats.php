@@ -18,7 +18,8 @@ class StreamStats
         public readonly int $rowCount,
         public readonly int $columnCount,
         public readonly float $duration,
-        public readonly int $warningCount = 0
+        public readonly int $warningCount = 0,
+        public readonly int $connectionId = 0
     ) {
     }
 

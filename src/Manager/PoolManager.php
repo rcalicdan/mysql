@@ -32,26 +32,26 @@ use Throwable;
  * this absorption phase the connection is tracked in `$drainingConnections`
  * to guarantee it is never lost — even if `close()` is called mid-drain.
  *
+ * ## Connection Reset
+ *
+ * If `resetConnection` is enabled, the pool will issue `COM_RESET_CONNECTION`
+ * asynchronously before returning a connection to the idle pool. This clears
+ * session state (variables, temporary tables, transactions) to prevent state
+ * leakage between requests. This phase is also tracked via `$drainingConnections`.
+ *
  * ## Query Cancellation Toggle
  *
  * The `$enableServerSideCancellation` constructor parameter controls whether
  * cancelling a query promise causes a KILL QUERY to be dispatched to the
  * server. When disabled, cancellation only transitions the promise state —
  * the server-side query runs to completion and the connection is eventually
- * returned to the pool normally. This is useful in environments where
- * side-channel connections are expensive or restricted (e.g. strict firewall
- * rules, low connection-count quotas, or testing scenarios).
- *
- * The toggle is applied by rewriting `ConnectionParams::$enableServerSideCancellation`
- * before any connection is opened, so all connections in the pool share the
- * same behaviour for their entire lifetime.
+ * returned to the pool normally.
  *
  * ## Kill Connections
  *
- * KILL QUERY requires a separate TCP connection to the same server (MySQL
- * protocol limitation). These kill connections are intentionally created
- * outside the pool — they are brief, critical, and must never be blocked by
- * pool capacity limits. They are always closed immediately after use.
+ * KILL QUERY requires a separate TCP connection to the same server. These
+ * kill connections are intentionally created outside the pool — they are brief,
+ * critical, and must never be blocked by pool capacity limits.
  *
  * This class is not subject to any backward compatibility (BC) guarantees.
  */
@@ -92,8 +92,8 @@ class PoolManager
     private array $connectionCreatedAt = [];
 
     /**
-     * Connections currently absorbing a stale KILL flag via DO SLEEP(0).
-     * Tracked to prevent leaks if close() is called during drain.
+     * Connections currently absorbing a stale KILL flag via DO SLEEP(0) or resetting
+     * via COM_RESET_CONNECTION. Tracked to prevent leaks if close() is called during drain.
      *
      * @var array<int, MysqlConnection> keyed by spl_object_id.
      */
@@ -116,16 +116,7 @@ class PoolManager
      * @param int                $maxLifetime             Seconds before a connection is rotated.
      * @param ConnectorInterface|null $connector          Optional custom socket connector.
      * @param bool               $enableServerSideCancellation Whether cancelling a query promise dispatches
-     *                                                    KILL QUERY to the server. When false, promise
-     *                                                    cancellation only changes the promise state —
-     *                                                    the server-side query runs to completion.
-     *                                                    Defaults to true.
-     *
-     *                                                    This parameter takes precedence over the value
-     *                                                    carried in ConnectionParams, allowing the pool
-     *                                                    to enforce a uniform policy across all
-     *                                                    connections regardless of how ConnectionParams
-     *                                                    was constructed.
+     *                                                    KILL QUERY to the server. Defaults to true.
      */
     public function __construct(
         ConnectionParams|array|string $config,
@@ -240,11 +231,8 @@ class PoolManager
     /**
      * Releases a connection back to the pool.
      *
-     * If the connection has a pending stale KILL flag (`wasQueryCancelled()`),
-     * it is placed into a draining phase: `DO SLEEP(0)` is issued asynchronously
-     * to absorb the flag before the connection is returned to service. The
-     * connection is tracked in `$drainingConnections` throughout this phase
-     * so it cannot be lost.
+     * Determines whether the connection needs to absorb a stale kill flag,
+     * undergo a COM_RESET_CONNECTION flush, or if it can be parked cleanly.
      *
      * @param MysqlConnection $connection
      */
@@ -257,7 +245,7 @@ class PoolManager
             return;
         }
 
-        // Absorb stale kill flag before the connection can be reused.
+        // 1. Absorb stale kill flag before the connection can be reused or reset.
         if ($connection->wasQueryCancelled()) {
             $this->drainAndRelease($connection);
 
@@ -266,14 +254,17 @@ class PoolManager
 
         // If the connection is not in a READY state (e.g., still QUERYING) and
         // was not explicitly cancelled, it means it was released in a dirty or
-        // corrupted state (such as an unconsumed stream or a protocol desync).
-        // It cannot safely park in the idle pool because the next borrower
-        // would receive a broken connection. Instead, destroy it completely
-        // and check if the pool needs to spin up a fresh replacement for a
-        // queued waiter.
+        // corrupted state. It cannot safely park in the idle pool.
         if (! $connection->isReady()) {
             $this->removeConnection($connection);
             $this->satisfyNextWaiter();
+
+            return;
+        }
+
+        // 2. Perform connection state reset if enabled.
+        if ($this->connectionParams->resetConnection) {
+            $this->resetAndRelease($connection);
 
             return;
         }
@@ -297,6 +288,8 @@ class PoolManager
             'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
             'query_cancellation_enabled' => $this->connectionParams->enableServerSideCancellation,
+            'compression_enabled' => $this->connectionParams->compress,
+            'reset_connection_enabled' => $this->connectionParams->resetConnection,
         ];
     }
 
@@ -412,16 +405,10 @@ class PoolManager
     }
 
     /**
-     * Absorbs a stale KILL flag by issuing `DO SLEEP(0)` on the connection,
-     * then re-releases it once the flag is cleared.
+     * Absorbs a stale KILL flag by issuing `DO SLEEP(0)` on the connection.
      *
      * The connection is tracked in `$drainingConnections` for the duration so
      * it cannot be lost if `close()` is called while the drain is in progress.
-     *
-     * The `DO SLEEP(0)` may resolve normally or reject with ERR 1317 (query
-     * interrupted) depending on whether the KILL arrived before or after the
-     * original query completed. Both outcomes are valid — the flag is consumed
-     * either way.
      */
     private function drainAndRelease(MysqlConnection $connection): void
     {
@@ -449,9 +436,15 @@ class PoolManager
                     }
 
                     $connection->clearCancelledFlag();
-                    // Mark active again for releaseClean logic.
+
+                    // Mark active again for releaseClean or reset logic
                     $this->activeConnectionsMap[$connId] = $connection;
-                    $this->releaseClean($connection);
+
+                    if ($this->connectionParams->resetConnection) {
+                        $this->resetAndRelease($connection);
+                    } else {
+                        $this->releaseClean($connection);
+                    }
                 },
                 function () use ($connection, $connId): void {
                     // ERR 1317 "Query execution was interrupted" — expected,
@@ -475,17 +468,61 @@ class PoolManager
                     }
 
                     $this->activeConnectionsMap[$connId] = $connection;
-                    $this->releaseClean($connection);
+
+                    if ($this->connectionParams->resetConnection) {
+                        $this->resetAndRelease($connection);
+                    } else {
+                        $this->releaseClean($connection);
+                    }
                 }
             )
         ;
     }
 
     /**
-     * Releases a clean (no pending kill flag) connection: either hands it to
-     * a waiting caller or parks it in the idle pool.
-     *
-     * Skips any cancelled waiter promises rather than resolving them.
+     * Issues a COM_RESET_CONNECTION to clear session state before making
+     * it available for the next caller. Tracked in drainingConnections.
+     */
+    private function resetAndRelease(MysqlConnection $connection): void
+    {
+        $connId = spl_object_id($connection);
+
+        unset($this->activeConnectionsMap[$connId]);
+
+        if ($this->isClosing) {
+            $this->removeConnection($connection);
+
+            return;
+        }
+
+        $this->drainingConnections[$connId] = $connection;
+
+        $connection->reset()->then(
+            function () use ($connection, $connId): void {
+                unset($this->drainingConnections[$connId]);
+
+                if ($this->isClosing) {
+                    $this->removeConnection($connection);
+
+                    return;
+                }
+
+                $this->activeConnectionsMap[$connId] = $connection;
+                $this->releaseClean($connection);
+            },
+            function () use ($connection, $connId): void {
+                unset($this->drainingConnections[$connId]);
+
+                // If reset fails, the connection state is tainted. Drop it entirely.
+                $this->removeConnection($connection);
+                $this->satisfyNextWaiter();
+            }
+        );
+    }
+
+    /**
+     * Releases a clean connection: either hands it to a waiting caller
+     * or parks it in the idle pool.
      */
     private function releaseClean(MysqlConnection $connection): void
     {
@@ -595,9 +632,6 @@ class PoolManager
      * Dequeues the next non-cancelled waiter promise, discarding any cancelled
      * ones encountered along the way.
      *
-     * Cancelled waiters do not affect pool accounting — the connection slot
-     * they "reserved" is returned to the available capacity immediately.
-     *
      * @return Promise<MysqlConnection>|null
      */
     private function dequeueActiveWaiter(): ?Promise
@@ -609,8 +643,6 @@ class PoolManager
             if (! $waiter->isCancelled()) {
                 return $waiter;
             }
-
-            // Cancelled waiter — the caller gave up. No connection needed for it.
         }
 
         return null;

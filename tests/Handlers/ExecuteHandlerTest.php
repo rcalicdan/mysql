@@ -143,7 +143,8 @@ describe('ExecuteHandler', function () {
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $eofReader->shouldReceive('readFixedString')->andReturn('');
+        // The new EOF parsers correctly read the 2-byte warnings and 2-byte status flags!
+        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0);
         $handler->processPacket($eofReader, 5, 2);
 
         $result = null;
@@ -203,7 +204,8 @@ describe('ExecuteHandler', function () {
 
         $eofReader = Mockery::mock(PayloadReader::class);
         $eofReader->shouldReceive('readFixedInteger')->with(1)->andReturn(0xFE);
-        $eofReader->shouldReceive('readFixedString')->andReturn('');
+        // The new EOF parsers correctly read the 2-byte warnings and 2-byte status flags!
+        $eofReader->shouldReceive('readFixedInteger')->with(2)->andReturn(0);
         $handler->processPacket($eofReader, 5, 2);
 
         $stats = null;

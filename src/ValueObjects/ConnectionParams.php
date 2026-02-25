@@ -29,6 +29,12 @@ final readonly class ConnectionParams
      *                                           only transitions the promise state — the
      *                                           server-side query runs to completion. Defaults
      *                                           to true.
+     * @param bool $compress Whether to enable MySQL Protocol Compression (zlib).
+     *                       Requires the server to support CLIENT_COMPRESS.
+     *                       Defaults to false.
+     * @param bool $resetConnection Whether to send COM_RESET_CONNECTION before returning
+     *                              the connection to the pool. Clears session state.
+     *                              Defaults to false.
      */
     public function __construct(
         public string $host,
@@ -45,6 +51,8 @@ final readonly class ConnectionParams
         public bool $sslVerify = false,
         public float $killTimeoutSeconds = self::DEFAULT_KILL_TIMEOUT_SECONDS,
         public bool $enableServerSideCancellation = true,
+        public bool $compress = false,
+        public bool $resetConnection = false,
     ) {
         if ($this->killTimeoutSeconds <= 0) {
             throw new \InvalidArgumentException(
@@ -62,7 +70,7 @@ final readonly class ConnectionParams
      * Recognised keys:
      *   host, port, username, password, database, charset, connect_timeout,
      *   ssl, ssl_ca, ssl_cert, ssl_key, ssl_verify, kill_timeout_seconds,
-     *   enable_server_side_cancellation
+     *   enable_server_side_cancellation, compress, reset_connection
      *
      * @param array<string, mixed> $config
      */
@@ -122,6 +130,12 @@ final readonly class ConnectionParams
             ? (bool) $enableServerSideCancellation
             : true;
 
+        $compress = $config['compress'] ?? false;
+        $compress = \is_scalar($compress) ? (bool) $compress : false;
+
+        $resetConnection = $config['reset_connection'] ?? false;
+        $resetConnection = \is_scalar($resetConnection) ? (bool) $resetConnection : false;
+
         return new self(
             host: $host,
             port: $port,
@@ -137,6 +151,8 @@ final readonly class ConnectionParams
             sslVerify: $sslVerify,
             killTimeoutSeconds: $killTimeoutSeconds,
             enableServerSideCancellation: $enableServerSideCancellation,
+            compress: $compress,
+            resetConnection: $resetConnection,
         );
     }
 
@@ -148,6 +164,7 @@ final readonly class ConnectionParams
      * - mysql://user:pass@localhost/database?ssl=true&ssl_verify=true
      * - mysql://user:pass@localhost/database?kill_timeout_seconds=5.0
      * - mysql://user:pass@localhost/database?enable_server_side_cancellation=false
+     * - mysql://user:pass@localhost/database?compress=true&reset_connection=true
      * - user:pass@localhost:3306/database (scheme is optional)
      *
      * @param string $uri MySQL connection URI
@@ -193,6 +210,14 @@ final readonly class ConnectionParams
             ? filter_var($query['enable_server_side_cancellation'], FILTER_VALIDATE_BOOLEAN)
             : true;
 
+        $compress = isset($query['compress'])
+            ? filter_var($query['compress'], FILTER_VALIDATE_BOOLEAN)
+            : false;
+
+        $resetConnection = isset($query['reset_connection'])
+            ? filter_var($query['reset_connection'], FILTER_VALIDATE_BOOLEAN)
+            : false;
+
         return new self(
             host: (string) $parts['host'],
             port: isset($parts['port']) ? (int) $parts['port'] : 3306,
@@ -208,6 +233,8 @@ final readonly class ConnectionParams
             sslVerify: isset($query['ssl_verify']) ? filter_var($query['ssl_verify'], FILTER_VALIDATE_BOOLEAN) : false,
             killTimeoutSeconds: $killTimeoutSeconds,
             enableServerSideCancellation: $enableServerSideCancellation,
+            compress: $compress,
+            resetConnection: $resetConnection,
         );
     }
 
@@ -234,6 +261,8 @@ final readonly class ConnectionParams
             sslVerify: $this->sslVerify,
             killTimeoutSeconds: $this->killTimeoutSeconds,
             enableServerSideCancellation: $enabled,
+            compress: $this->compress,
+            resetConnection: $this->resetConnection,
         );
     }
 
