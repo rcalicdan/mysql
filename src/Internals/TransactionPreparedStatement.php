@@ -95,7 +95,7 @@ class TransactionPreparedStatement implements PreparedStatementInterface
      */
     public function __destruct()
     {
-        if (!$this->isClosed && !$this->connection->isClosed()) {
+        if (! $this->isClosed && ! $this->connection->isClosed()) {
             $this->close();
         }
     }

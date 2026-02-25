@@ -169,7 +169,8 @@ final class QueryHandler
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
                 warningCount: $frame->warnings,
-                columnDefinitions: []
+                columnDefinitions: [],
+                connectionId: $this->connection->getThreadId()
             );
 
             if ($this->hasMoreResults($frame->statusFlags)) {
@@ -311,7 +312,8 @@ final class QueryHandler
                 rowCount: $this->streamedRowCount,
                 columnCount: \count($this->columns),
                 duration: $duration,
-                warningCount: $packet->warnings
+                warningCount: $packet->warnings,
+                connectionId: $this->connection->getThreadId()
             );
             $currentResult = null;
             $currentStats = $stats;
@@ -321,7 +323,8 @@ final class QueryHandler
                 affectedRows: 0,
                 lastInsertId: 0,
                 warningCount: $packet->warnings,
-                columnDefinitions: $this->columns
+                columnDefinitions: $this->columns,
+                connectionId: $this->connection->getThreadId()
             );
             $currentResult = $result;
             $currentStats = null;

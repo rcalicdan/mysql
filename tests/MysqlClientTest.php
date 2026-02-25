@@ -839,4 +839,98 @@ describe('MysqlClient', function (): void {
             ;
         });
     });
+
+    describe('Connection Reset', function (): void {
+
+        it('demonstrates state leakage without reset_connection', function (): void {
+            $client = makeNoResetClient(maxConnections: 1);
+
+            await($client->query("SET @leak_var = 'I_AM_A_LEAKED_VARIABLE'"));
+
+            $result = await($client->query('SELECT @leak_var AS val'));
+
+            expect($result->fetchOne()['val'])->toBe('I_AM_A_LEAKED_VARIABLE');
+
+            $client->close();
+        });
+
+        it('clears session variables between pool reuses with reset_connection enabled', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            await($client->query("SET @my_var = 'I_SHOULD_BE_DELETED'"));
+
+            $result = await($client->query('SELECT @my_var AS val'));
+
+            expect($result->fetchOne()['val'])->toBeNull();
+
+            $client->close();
+        });
+
+        it('clears multiple session variables between pool reuses', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            await($client->query('SET @a = 1, @b = 2, @c = 3'));
+
+            $result = await($client->query('SELECT @a AS a, @b AS b, @c AS c'));
+            $row = $result->fetchOne();
+
+            expect($row['a'])->toBeNull()
+                ->and($row['b'])->toBeNull()
+                ->and($row['c'])->toBeNull()
+            ;
+
+            $client->close();
+        });
+
+        it('handles prepared statement cache invalidation after reset', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            $result1 = await($client->query('SELECT ? AS num', [100]));
+            expect($result1->fetchOne()['num'])->toBe(100);
+
+            $result2 = await($client->query('SELECT ? AS num', [200]));
+            expect($result2->fetchOne()['num'])->toBe(200);
+
+            $client->close();
+        });
+
+        it('state does not leak across multiple pool reuses', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            for ($i = 1; $i <= 5; $i++) {
+                await($client->query("SET @counter = {$i}"));
+
+                $result = await($client->query('SELECT @counter AS val'));
+                expect($result->fetchOne()['val'])->toBeNull();
+            }
+
+            $client->close();
+        });
+
+        it('does not leak state between different logical requests on a shared pool', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            $tx = await($client->beginTransaction());
+            await($tx->query("SET @request_id = 'request_A'"));
+            $resultA = await($tx->query('SELECT @request_id AS val'));
+            expect($resultA->fetchOne()['val'])->toBe('request_A');
+            await($tx->commit());
+
+            $resultB = await($client->query('SELECT @request_id AS val'));
+            expect($resultB->fetchOne()['val'])->toBeNull();
+
+            $client->close();
+        });
+
+        it('connection remains healthy and reusable across multiple resets', function (): void {
+            $client = makeResetClient(maxConnections: 1);
+
+            for ($i = 1; $i <= 5; $i++) {
+                $result = await($client->query('SELECT ? AS val', [$i]));
+                expect($result->fetchOne()['val'])->toBe($i);
+            }
+
+            $client->close();
+        });
+    });
 });

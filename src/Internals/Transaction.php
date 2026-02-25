@@ -22,10 +22,14 @@ use Hibla\Sql\Transaction as TransactionInterface;
  */
 class Transaction implements TransactionInterface
 {
-    /** @var list<callable(): void> */
+    /**
+     *  @var list<callable(): void>
+     */
     private array $onCommitCallbacks = [];
 
-    /** @var list<callable(): void> */
+    /**
+     *  @var list<callable(): void>
+     */
     private array $onRollbackCallbacks = [];
 
     private bool $active = true;
@@ -70,11 +74,13 @@ class Transaction implements TransactionInterface
 
                     return $stmt->execute($params)
                         ->finally(function () use ($stmt, $isCached) {
-                            if (!$isCached) {
+                            if (! $isCached) {
                                 $stmt->close();
                             }
-                        });
-                });
+                        })
+                    ;
+                })
+            ;
         }
 
         return $this->withCancellation($this->trackErrorState($promise));
@@ -106,14 +112,16 @@ class Transaction implements TransactionInterface
                     return $stmt->executeStream(array_values($params), $bufferSize)
                         ->then(function (MysqlRowStream $stream) use ($stmt, $isCached): MysqlRowStream {
                             if ($stream instanceof RowStream) {
-                                if (!$isCached) {
+                                if (! $isCached) {
                                     $stream->waitForCommand()->finally($stmt->close(...));
                                 }
                             }
 
                             return $stream;
-                        });
-                });
+                        })
+                    ;
+                })
+            ;
         }
 
         return $this->withCancellation($this->trackErrorState($promise));
@@ -258,7 +266,7 @@ class Transaction implements TransactionInterface
      */
     public function rollback(): PromiseInterface
     {
-        $this->ensureActive(); 
+        $this->ensureActive();
         $this->active = false;
         $this->failed = false;
 
@@ -310,7 +318,7 @@ class Transaction implements TransactionInterface
      */
     public function rollbackTo(string $identifier): PromiseInterface
     {
-        $this->ensureActive(); 
+        $this->ensureActive();
         $escaped = $this->escapeIdentifier($identifier);
 
         // Rolling back to a savepoint potentially clears the failed state for operations after that savepoint
@@ -319,6 +327,7 @@ class Transaction implements TransactionInterface
         return $this->connection->query("ROLLBACK TO SAVEPOINT {$escaped}")->catch(
             function (\Throwable $e) use ($identifier): never {
                 $this->failed = true; // If rollback fails, the whole transaction is dead
+
                 throw new TransactionException(
                     "Failed to rollback to savepoint '{$identifier}': " . $e->getMessage(),
                     (int) $e->getCode(),
@@ -392,6 +401,7 @@ class Transaction implements TransactionInterface
     {
         return $promise->catch(function (\Throwable $e) {
             $this->failed = true;
+
             throw $e;
         });
     }
@@ -409,6 +419,7 @@ class Transaction implements TransactionInterface
         }
 
         return $this->statementCache->get($sql)->then(function (mixed $stmt) use ($sql) {
+            /** @phpstan-ignore instanceof.alwaysFalse */
             if ($stmt instanceof PreparedStatement) {
                 return [$stmt, true];
             }

@@ -23,4 +23,9 @@ interface MysqlResult extends Result
      * @return array<int, MysqlColumnDefinition>
      */
     public function getFields(): array;
+
+    /**
+     * Get the connection id associated with the executed query.
+     */
+    public function getConnectionId(): int;
 }

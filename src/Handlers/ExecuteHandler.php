@@ -154,7 +154,8 @@ final class ExecuteHandler
                 affectedRows: $frame->affectedRows,
                 lastInsertId: $frame->lastInsertId,
                 warningCount: $frame->warnings,
-                columnDefinitions: []
+                columnDefinitions: [],
+                connectionId: $this->connection->getThreadId()
             );
             $this->currentPromise?->resolve($result);
 
@@ -287,7 +288,8 @@ final class ExecuteHandler
                 rowCount: $this->streamedRowCount,
                 columnCount: \count($this->columnDefinitions),
                 duration: $duration,
-                warningCount: $packet->warnings
+                warningCount: $packet->warnings,
+                connectionId: $this->connection->getThreadId()
             );
 
             if ($this->streamContext->onComplete !== null) {
@@ -305,7 +307,8 @@ final class ExecuteHandler
                 affectedRows: 0,
                 lastInsertId: 0,
                 warningCount: $packet->warnings,
-                columnDefinitions: $this->columnDefinitions
+                columnDefinitions: $this->columnDefinitions,
+                connectionId: $this->connection->getThreadId()
             );
             $this->currentPromise?->resolve($result);
         }

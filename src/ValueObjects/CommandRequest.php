@@ -38,5 +38,6 @@ final class CommandRequest
         public readonly array $params = [],
         public readonly int $statementId = 0,
         public readonly mixed $context = null,
-    ) {}
+    ) {
+    }
 }

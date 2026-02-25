@@ -57,13 +57,6 @@ use Throwable;
 class Connection
 {
     /**
-     * How long (seconds) to wait for a KILL QUERY to settle before giving up
-     * and proceeding with teardown anyway. Bounds the worst-case shutdown time
-     * when the kill side-channel is slow or unreachable.
-     */
-    private const KILL_TIMEOUT_SECONDS = 3.0;
-
-    /**
      * @var SplQueue<CommandRequest>
      */
     private SplQueue $commandQueue;
@@ -229,7 +222,7 @@ class Connection
         while ($length >= $MAX_PACKET_SIZE) {
             $chunk = substr($payload, $offset, $MAX_PACKET_SIZE);
             $packet = $this->packetWriter->write($chunk, $sequenceId);
-            
+
             $this->socket->write($packet);
 
             $sequenceId++;
@@ -239,7 +232,7 @@ class Connection
 
         $chunk = substr($payload, $offset);
         $packet = $this->packetWriter->write($chunk, $sequenceId);
-        
+
         $this->socket->write($packet);
         $sequenceId++;
     }
@@ -548,7 +541,6 @@ class Connection
     ): PromiseInterface {
         if ($this->state === ConnectionState::CLOSED) {
             if ($type === CommandRequest::TYPE_CLOSE_STMT) {
-                // @phpstan-ignore-next-line
                 return Promise::resolved(null);
             }
 
@@ -692,8 +684,10 @@ class Connection
                                     return $killConn->query("KILL QUERY {$threadId}")
                                         ->finally(function () use ($killConn) {
                                             $killConn->close();
-                                        });
-                                });
+                                        })
+                                    ;
+                                })
+                            ;
                         }),
                         $this->params->killTimeoutSeconds
                     );

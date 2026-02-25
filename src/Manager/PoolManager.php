@@ -436,7 +436,7 @@ class PoolManager
                     }
 
                     $connection->clearCancelledFlag();
-                    
+
                     // Mark active again for releaseClean or reset logic
                     $this->activeConnectionsMap[$connId] = $connection;
 
@@ -512,7 +512,7 @@ class PoolManager
             },
             function () use ($connection, $connId): void {
                 unset($this->drainingConnections[$connId]);
-                
+
                 // If reset fails, the connection state is tainted. Drop it entirely.
                 $this->removeConnection($connection);
                 $this->satisfyNextWaiter();
@@ -521,7 +521,7 @@ class PoolManager
     }
 
     /**
-     * Releases a clean connection: either hands it to a waiting caller 
+     * Releases a clean connection: either hands it to a waiting caller
      * or parks it in the idle pool.
      */
     private function releaseClean(MysqlConnection $connection): void

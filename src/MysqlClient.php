@@ -110,7 +110,7 @@ final class MysqlClient implements SqlClientInterface
                 $config['reset_connection'] ??= $resetConnection;
             } elseif (\is_string($config)) {
                 $separator = str_contains($config, '?') ? '&' : '?';
-                if (!str_contains($config, 'reset_connection=')) {
+                if (! str_contains($config, 'reset_connection=')) {
                     $config .= $separator . 'reset_connection=' . ($resetConnection ? 'true' : 'false');
                 }
             }
@@ -588,11 +588,11 @@ final class MysqlClient implements SqlClientInterface
      */
     private function getCacheForConnection(Connection $conn): ?ArrayCache
     {
-        if (!$this->enableStatementCache || $this->statementCaches === null) {
+        if (! $this->enableStatementCache || $this->statementCaches === null) {
             return null;
         }
 
-        if (!$this->statementCaches->offsetExists($conn)) {
+        if (! $this->statementCaches->offsetExists($conn)) {
             $this->statementCaches->offsetSet($conn, new ArrayCache($this->statementCacheSize));
         }
 

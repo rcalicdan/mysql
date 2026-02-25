@@ -40,7 +40,8 @@ class Result implements MysqlResult
         private readonly int $affectedRows = 0,
         private readonly int $lastInsertId = 0,
         private readonly int $warningCount = 0,
-        private readonly array $columnDefinitions = []
+        private readonly array $columnDefinitions = [],
+        private readonly int $connectionId = 0
     ) {
         $this->numRows = \count($this->rows);
 
@@ -55,6 +56,14 @@ class Result implements MysqlResult
         );
 
         $this->columnCount = \count($this->columnNames);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getConnectionId(): int
+    {
+        return $this->connectionId;
     }
 
     /**

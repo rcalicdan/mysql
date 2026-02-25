@@ -404,7 +404,7 @@ final class HandshakeHandler
         }
 
         // Enable Compression if requested and server supports it
-        if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS)) {
+        if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
             $flags |= CapabilityFlags::CLIENT_COMPRESS;
         }
 

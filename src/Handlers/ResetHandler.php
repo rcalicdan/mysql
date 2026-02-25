@@ -20,11 +20,16 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 final class ResetHandler
 {
     private int $sequenceId = 0;
+
+    /**
+     * @var Promise<mixed>|null
+     */
     private ?Promise $currentPromise = null;
 
     public function __construct(
         private readonly Connection $connection
-    ) {}
+    ) {
+    }
 
     /**
      * @param Promise<bool> $promise
@@ -35,7 +40,7 @@ final class ResetHandler
         $this->sequenceId = 0;
 
         $payload = \chr(0x1F);
-        
+
         $this->connection->writePacket($payload, $this->sequenceId);
     }
 
@@ -47,6 +52,7 @@ final class ResetHandler
 
             if ($frame instanceof OkPacket) {
                 $this->currentPromise?->resolve(true);
+
                 return true;
             }
 
@@ -56,18 +62,21 @@ final class ResetHandler
                     $frame->errorCode
                 );
                 $this->currentPromise?->reject($exception);
+
                 return true;
             }
 
             $exception = new ConnectionException('Unexpected packet type in reset response', 0);
             $this->currentPromise?->reject($exception);
+
             return true;
-            
+
         } catch (\Throwable $e) {
             if (! $e instanceof ConnectionException) {
                 $e = new ConnectionException('Failed to process reset response: ' . $e->getMessage(), (int)$e->getCode(), $e);
             }
             $this->currentPromise?->reject($e);
+
             return true;
         }
     }
