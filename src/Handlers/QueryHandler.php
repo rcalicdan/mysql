@@ -12,7 +12,6 @@ use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
-use Rcalicdan\MySQLBinaryProtocol\Constants\StatusFlags;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
@@ -41,8 +40,6 @@ final class QueryHandler
 
     private float $streamStartTime = 0.0;
 
-    private bool $isDraining = false;
-
     private readonly ResponseParser $responseParser;
 
     private ParserState $state = ParserState::INIT;
@@ -51,7 +48,15 @@ final class QueryHandler
 
     private ?StreamContext $streamContext = null;
 
-    private ?Result $primaryResult = null;
+    /**
+     * @var Result|null The first result set in the chain, returned to the user.
+     */
+    private ?Result $headResult = null;
+
+    /**
+     * @var Result|null The most recent result set, used to link the next one.
+     */
+    private ?Result $tailResult = null;
 
     private ?StreamStats $primaryStreamStats = null;
 
@@ -92,9 +97,9 @@ final class QueryHandler
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
         $this->streamStartTime = (float) hrtime(true);
-        $this->primaryResult = null;
+        $this->headResult = null;
+        $this->tailResult = null;
         $this->primaryStreamStats = null;
-        $this->isDraining = false;
 
         $packet = $this->commandBuilder->buildQuery($sql);
 
@@ -173,14 +178,18 @@ final class QueryHandler
                 connectionId: $this->connection->getThreadId()
             );
 
-            if ($this->hasMoreResults($frame->statusFlags)) {
+            if ($frame->hasMoreResults()) {
                 $this->prepareDrain($result, null);
-
                 return;
             }
 
-            $finalResult = $this->primaryResult ?? $result;
-            $this->currentPromise?->resolve($finalResult);
+            if ($this->headResult === null) {
+                $this->headResult = $result;
+            } else {
+                $this->linkValidResult($result);
+            }
+
+            $this->currentPromise?->resolve($this->headResult);
 
             return;
         }
@@ -192,30 +201,39 @@ final class QueryHandler
             return;
         }
 
-        $exception = new QueryException(
-            'Unexpected packet type in query response header',
-            0
-        );
+        $exception = new QueryException('Unexpected packet type in query response header', 0);
         $this->currentPromise?->reject($exception);
-    }
-
-    private function hasMoreResults(int $flags): bool
-    {
-        return ($flags & StatusFlags::SERVER_MORE_RESULTS_EXISTS) !== 0;
     }
 
     private function prepareDrain(?Result $result, ?StreamStats $stats): void
     {
-        if (! $this->isDraining) {
-            $this->primaryResult = $result;
+        if ($this->primaryStreamStats === null) {
             $this->primaryStreamStats = $stats;
-            $this->isDraining = true;
+        }
+
+        if ($result !== null) {
+            if ($this->headResult === null) {
+                $this->headResult = $result;
+                $this->tailResult = $result;
+            } else {
+                $this->linkValidResult($result);
+            }
         }
 
         $this->state = ParserState::INIT;
         $this->columnCount = 0;
         $this->columns = [];
         $this->rows = [];
+    }
+
+    private function linkValidResult(Result $result): void
+    {
+        // Prevent appending trailing empty OK_Packets (like SP termination packets)
+        // unless they contain actual columns or affected rows.
+        if ($result->rowCount() > 0 || $result->getAffectedRows() > 0 || $result->hasLastInsertId() || \count($result->getFields()) > 0) {
+            $this->tailResult?->setNextResult($result);
+            $this->tailResult = $result;
+        }
     }
 
     private function handleColumn(PayloadReader $reader, int $length, int $seq): void
@@ -226,43 +244,26 @@ final class QueryHandler
         if ($frame instanceof EofPacket) {
             $this->state = ParserState::ROWS;
             $this->rowParser = new RowOrEofParser($this->columnCount);
-
             return;
         }
 
         if ($frame instanceof ErrPacket) {
-            $exception = $this->createExceptionFromError(
-                $frame->errorCode,
-                $frame->errorMessage
-            );
-            $this->currentPromise?->reject($exception);
-
+            $this->currentPromise?->reject($this->createExceptionFromError($frame->errorCode, $frame->errorMessage));
             return;
         }
 
         if ($frame instanceof ColumnDefinition) {
-            if ($this->isDraining) {
-                return;
-            }
-
             $this->columns[] = $frame;
-
             return;
         }
 
-        $exception = new QueryException(
-            'Unexpected packet type in query column definitions',
-            0
-        );
-        $this->currentPromise?->reject($exception);
+        $this->currentPromise?->reject(new QueryException('Unexpected packet type in query column definitions', 0));
     }
 
     private function handleRow(PayloadReader $reader, int $length, int $seq): void
     {
         if ($this->rowParser === null) {
-            $exception = new QueryException('Row parser not initialized', 0);
-            $this->currentPromise?->reject($exception);
-
+            $this->currentPromise?->reject(new QueryException('Row parser not initialized', 0));
             return;
         }
 
@@ -270,13 +271,11 @@ final class QueryHandler
 
         if ($frame instanceof ErrPacket) {
             $this->handleRowError($frame);
-
             return;
         }
 
         if ($frame instanceof EofPacket) {
             $this->handleEndOfResultSet($frame);
-
             return;
         }
 
@@ -287,16 +286,12 @@ final class QueryHandler
 
     private function handleRowError(ErrPacket $packet): void
     {
-        $exception = $this->createExceptionFromError(
-            $packet->errorCode,
-            $packet->errorMessage
-        );
+        $exception = $this->createExceptionFromError($packet->errorCode, $packet->errorMessage);
 
         if ($this->streamContext !== null && $this->streamContext->onError !== null) {
             try {
                 ($this->streamContext->onError)($exception);
             } catch (\Throwable $e) {
-                // Ignore callback errors
             }
         }
 
@@ -307,32 +302,18 @@ final class QueryHandler
     {
         if ($this->streamContext !== null) {
             $duration = ((float)hrtime(true) - $this->streamStartTime) / 1e9;
-
-            $stats = new StreamStats(
-                rowCount: $this->streamedRowCount,
-                columnCount: \count($this->columns),
-                duration: $duration,
-                warningCount: $packet->warnings,
-                connectionId: $this->connection->getThreadId()
-            );
+            $stats = new StreamStats($this->streamedRowCount, \count($this->columns), $duration, $packet->warnings, $this->connection->getThreadId());
             $currentResult = null;
             $currentStats = $stats;
         } else {
-            $result = new Result(
-                rows: $this->rows,
-                affectedRows: 0,
-                lastInsertId: 0,
-                warningCount: $packet->warnings,
-                columnDefinitions: $this->columns,
-                connectionId: $this->connection->getThreadId()
-            );
+            $result = new Result($this->rows, 0, 0, $packet->warnings, $this->columns, $this->connection->getThreadId());
             $currentResult = $result;
             $currentStats = null;
         }
 
-        if ($this->hasMoreResults($packet->statusFlags)) {
+        // Use the packet's method instead of a private helper
+        if ($packet->hasMoreResults()) {
             $this->prepareDrain($currentResult, $currentStats);
-
             return;
         }
 
@@ -342,26 +323,27 @@ final class QueryHandler
                 try {
                     ($this->streamContext->onComplete)($finalStats);
                 } catch (\Throwable $e) {
-                    // Ignore callback errors
                 }
             }
             if ($finalStats !== null) {
                 $this->currentPromise?->resolve($finalStats);
             }
         } else {
-            $finalResult = $this->primaryResult ?? $currentResult;
-            if ($finalResult !== null) {
-                $this->currentPromise?->resolve($finalResult);
+            if ($currentResult !== null) {
+                if ($this->headResult === null) {
+                    $this->headResult = $currentResult;
+                } else {
+                    $this->linkValidResult($currentResult);
+                }
+            }
+            if ($this->headResult !== null) {
+                $this->currentPromise?->resolve($this->headResult);
             }
         }
     }
 
     private function handleTextRow(TextRow $row): void
     {
-        if ($this->isDraining) {
-            return;
-        }
-
         $assocRow = $this->convertRowToAssociativeArray($row);
 
         if ($this->streamContext !== null) {
@@ -414,7 +396,6 @@ final class QueryHandler
             if ($this->streamContext->onError !== null) {
                 ($this->streamContext->onError)($e);
             }
-
             throw $e;
         }
     }
@@ -433,10 +414,7 @@ final class QueryHandler
         ];
 
         if (isset($constraintErrors[$errorCode])) {
-            return new ConstraintViolationException(
-                $message . ' - ' . $constraintErrors[$errorCode],
-                $errorCode
-            );
+            return new ConstraintViolationException($message . ' - ' . $constraintErrors[$errorCode], $errorCode);
         }
 
         return new QueryException($message, $errorCode);

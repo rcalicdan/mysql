@@ -26,14 +26,6 @@ use Rcalicdan\MySQLBinaryProtocol\Packet\UncompressedPacketReader;
 /**
  * Handles MySQL handshake protocol including SSL/TLS upgrade and Compression negotiation.
  *
- * MySQL uses a STARTTLS-like protocol which requires upgrading an existing
- * plain-text connection to encrypted during the handshake phase. This is
- * different from most protocols which use TLS from the beginning.
- *
- * Requirements:
- * - The underlying Socket implementation MUST support an `enableEncryption()` method
- *   for mid-connection SSL/TLS upgrade.
- *
  * @internal
  */
 final class HandshakeHandler
@@ -48,20 +40,13 @@ final class HandshakeHandler
 
     private bool $isSslEnabled = false;
 
-    /**
-     * The MySQL server thread ID for this connection.
-     * Captured from the initial handshake packet.
-     */
     private int $threadId = 0;
 
-    /**
-     * Whether compression was successfully negotiated.
-     * If true, the connection MUST switch to a CompressedPacketReader/Writer
-     * immediately after the handshake completes.
-     */
     private bool $compressionNegotiated = false;
 
-    /** @var Promise<int> The promise that resolves with the next sequence ID on successful handshake. */
+    /**
+     *  @var Promise<int> 
+     */
     private Promise $promise;
 
     public function __construct(
@@ -145,8 +130,6 @@ final class HandshakeHandler
             // Resolve the charset ID from the string config
             $charsetId = CharsetMap::getCollationId($this->params->charset);
 
-            // Store negotiation result. If both client and server agreed on compression,
-            // we must flag it so the Connection can upgrade the reader/writer later.
             if (($clientCaps & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
                 $this->compressionNegotiated = true;
             }
@@ -406,6 +389,11 @@ final class HandshakeHandler
         // Enable Compression if requested and server supports it
         if ($this->params->compress && ($this->serverCapabilities & CapabilityFlags::CLIENT_COMPRESS) !== 0) {
             $flags |= CapabilityFlags::CLIENT_COMPRESS;
+        }
+
+        // Security Feature: Enable Multi-Statements (Stacked Queries) ONLY if explicitly requested
+        if ($this->params->multiStatements) {
+            $flags |= CapabilityFlags::CLIENT_MULTI_STATEMENTS;
         }
 
         return $flags;

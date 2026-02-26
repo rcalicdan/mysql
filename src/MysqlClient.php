@@ -20,6 +20,7 @@ use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
+use Hibla\Socket\Interfaces\ConnectorInterface;
 use Hibla\Sql\IsolationLevelInterface;
 use Hibla\Sql\Result as ResultInterface;
 use Hibla\Sql\SqlClientInterface;
@@ -81,16 +82,18 @@ final class MysqlClient implements SqlClientInterface
      * independent from other instances, allowing true multi-database support.
      *
      * @param ConnectionParams|array<string, mixed>|string $config Database configuration.
-     * @param int  $maxConnections       Maximum number of connections in the pool.
-     * @param int  $idleTimeout          Seconds a connection can remain idle before being closed.
-     * @param int  $maxLifetime          Maximum seconds a connection can live before being rotated.
+     * @param int  $maxConnections Maximum number of connections in the pool.
+     * @param int  $idleTimeout Seconds a connection can remain idle before being closed.
+     * @param int  $maxLifetime Maximum seconds a connection can live before being rotated.
      * @param int  $statementCacheSize   Maximum number of prepared statements to cache per connection.
      * @param bool $enableStatementCache Whether to enable prepared statement caching. Defaults to true.
      * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY to the server when a
-     *                                      query promise is cancelled. Defaults to true.
-     * @param bool $resetConnection      Whether to issue COM_RESET_CONNECTION before returning
+     *                                           query promise is cancelled. Defaults to true.
+     * @param bool $resetConnection Whether to issue COM_RESET_CONNECTION before returning
      *                                      connections to the pool. Clears all session state, variables,
      *                                      and prepared statements. Defaults to false.
+     * @param int  $maxWaiters Maximum number of requests that can wait for a connection
+     *                         before throwing a PoolException. 0 means unlimited. Defaults to 0.
      *
      * @throws ConfigurationException If configuration is invalid.
      */
@@ -101,8 +104,11 @@ final class MysqlClient implements SqlClientInterface
         int $maxLifetime = 3600,
         int $statementCacheSize = 256,
         bool $enableStatementCache = true,
-        bool $enableServerSideCancellation = true,
+        bool $enableServerSideCancellation = false,
         bool $resetConnection = false,
+        int $maxWaiters = 0,
+        float $acquireTimeout = 10.0,
+        ?ConnectorInterface $connector = null,
     ) {
         try {
             // Ensure the resetConnection parameter is passed along if the config is an array or string
@@ -116,11 +122,14 @@ final class MysqlClient implements SqlClientInterface
             }
 
             $this->pool = new PoolManager(
-                $config,
-                $maxConnections,
-                $idleTimeout,
-                $maxLifetime,
+                config: $config,
+                maxSize: $maxConnections,
+                idleTimeout: $idleTimeout,
+                maxLifetime: $maxLifetime,
                 enableServerSideCancellation: $enableServerSideCancellation,
+                connector: $connector,
+                maxWaiters: $maxWaiters,
+                acquireTimeout: $acquireTimeout,
             );
 
             // Cache the resolved setting from the pool to avoid array lookups on every query
@@ -238,7 +247,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getAffectedRows())
+                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
         );
     }
 
@@ -252,7 +261,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getLastInsertId())
+                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
         );
     }
 
@@ -266,7 +275,7 @@ final class MysqlClient implements SqlClientInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->fetchOne())
+                ->then(fn(ResultInterface $result) => $result->fetchOne())
         );
     }
 
@@ -276,7 +285,7 @@ final class MysqlClient implements SqlClientInterface
      * @param array<int|string, mixed> $params
      * @return PromiseInterface<mixed>
      */
-    public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
+    public function fetchValue(string $sql, string|int|null $column = null, array $params = []): PromiseInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
@@ -285,6 +294,11 @@ final class MysqlClient implements SqlClientInterface
 
                     if ($row === null) {
                         return null;
+                    }
+
+                    if ($column === null) {
+                        $value = reset($row);
+                        return $value !== false ? $value : null;
                     }
 
                     return $row[$column] ?? null;
@@ -307,7 +321,7 @@ final class MysqlClient implements SqlClientInterface
     {
         $pool = $this->getPool();
 
-        $state = new class () {
+        $state = new class() {
             public ?Connection $connection = null;
             public bool $released = false;
         };
@@ -331,8 +345,7 @@ final class MysqlClient implements SqlClientInterface
                         $innerStreamPromise = $this->getCachedStatement($conn, $sql)
                             ->then(function (PreparedStatement $stmt) use ($params, $bufferSize) {
                                 return $stmt->executeStream(array_values($params), $bufferSize);
-                            })
-                        ;
+                            });
                     }
 
                     $q = $innerStreamPromise->then(
@@ -392,7 +405,7 @@ final class MysqlClient implements SqlClientInterface
 
                     $promise = $isolationLevel !== null
                         ? $conn->query("SET TRANSACTION ISOLATION LEVEL {$isolationLevel->toSql()}")
-                        ->then(fn () => $conn->query('START TRANSACTION'))
+                        ->then(fn() => $conn->query('START TRANSACTION'))
                         : $conn->query('START TRANSACTION');
 
                     return $promise->then(function () use ($conn, $pool, $cache) {
@@ -439,7 +452,7 @@ final class MysqlClient implements SqlClientInterface
                     /** @var TransactionInterface $tx */
                     $tx = await($this->beginTransaction($isolationLevel));
 
-                    $result = await(async(fn () => $callback($tx)));
+                    $result = await(async(fn() => $callback($tx)));
 
                     await($tx->commit());
 

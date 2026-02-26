@@ -28,4 +28,12 @@ interface MysqlResult extends Result
      * Get the connection id associated with the executed query.
      */
     public function getConnectionId(): int;
+
+    /**
+     * Returns the next result set if the query returned multiple result sets
+     * (e.g. from a Stored Procedure or Multi-Statement query).
+     *
+     * @return self|null Returns the next result set, or null if no more exist.
+     */
+    public function nextResult(): ?self;
 }

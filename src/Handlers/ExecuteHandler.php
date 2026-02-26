@@ -14,8 +14,8 @@ use Hibla\Sql\Exceptions\ConstraintViolationException;
 use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
-use Rcalicdan\MySQLBinaryProtocol\Frame\Response\BinaryRowOrEofParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ColumnDefinitionOrEofParser;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Response\DynamicRowOrEofParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\EofPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ErrPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\MetadataOmittedRowMarker;
@@ -23,7 +23,9 @@ use Rcalicdan\MySQLBinaryProtocol\Frame\Response\OkPacket;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResponseParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Response\ResultSetHeader;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\BinaryRow;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\BinaryRowParser;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Result\ColumnDefinition;
+use Rcalicdan\MySQLBinaryProtocol\Frame\Result\TextRow;
 use Rcalicdan\MySQLBinaryProtocol\Packet\PayloadReader;
 
 /**
@@ -44,6 +46,23 @@ final class ExecuteHandler
     private ExecuteState $state = ExecuteState::HEADER;
 
     private ?StreamContext $streamContext = null;
+
+    /**
+     * @var Result|null The first result set in the chain, returned to the user.
+     */
+    private ?Result $headResult = null;
+
+    /**
+     * @var Result|null The most recent result set, used to link the next one.
+     */
+    private ?Result $tailResult = null;
+
+    private ?StreamStats $primaryStreamStats = null;
+
+    /**
+     * @var DynamicRowOrEofParser|null Parser that handles dynamic Text vs Binary row detection.
+     */
+    private ?DynamicRowOrEofParser $rowParser = null;
 
     /**
      *  @var Promise<Result|StreamStats>|null
@@ -84,6 +103,11 @@ final class ExecuteHandler
         $this->currentPromise = $promise;
         $this->sequenceId = 0;
         $this->receivedNewMetadata = false;
+
+        $this->headResult = null;
+        $this->tailResult = null;
+        $this->primaryStreamStats = null;
+        $this->rowParser = null;
 
         $this->streamContext = $streamContext;
         $this->streamedRowCount = 0;
@@ -144,7 +168,6 @@ final class ExecuteHandler
             $this->currentPromise?->reject(
                 $this->createExceptionFromError($frame->errorCode, $frame->errorMessage)
             );
-
             return true;
         }
 
@@ -157,18 +180,57 @@ final class ExecuteHandler
                 columnDefinitions: [],
                 connectionId: $this->connection->getThreadId()
             );
-            $this->currentPromise?->resolve($result);
 
+            if ($frame->hasMoreResults()) {
+                $this->prepareDrain($result, null);
+                return false;
+            }
+
+            if ($this->headResult === null) {
+                $this->headResult = $result;
+            } else {
+                $this->linkValidResult($result);
+            }
+
+            $this->currentPromise?->resolve($this->headResult);
             return true;
         }
 
         if ($frame instanceof ResultSetHeader) {
             $this->state = ExecuteState::CHECK_DATA;
-
             return false;
         }
 
         throw new QueryException('Unexpected packet type in execute response header', 0);
+    }
+
+    private function prepareDrain(?Result $result, ?StreamStats $stats): void
+    {
+        if ($this->primaryStreamStats === null) {
+            $this->primaryStreamStats = $stats;
+        }
+
+        if ($result !== null) {
+            if ($this->headResult === null) {
+                $this->headResult = $result;
+                $this->tailResult = $result;
+            } else {
+                $this->linkValidResult($result);
+            }
+        }
+
+        $this->state = ExecuteState::HEADER;
+        $this->rows = [];
+        $this->receivedNewMetadata = false;
+        $this->rowParser = null;
+    }
+
+    private function linkValidResult(Result $result): void
+    {
+        if ($result->rowCount() > 0 || $result->getAffectedRows() > 0 || $result->hasLastInsertId() || \count($result->getFields()) > 0) {
+            $this->tailResult?->setNextResult($result);
+            $this->tailResult = $result;
+        }
     }
 
     private function handleDataPacket(PayloadReader $reader, int $length, int $seq): bool
@@ -176,18 +238,21 @@ final class ExecuteHandler
         $parser = new ColumnDefinitionOrEofParser();
         $frame = $parser->parse($reader, $length, $seq);
 
-        // Optimization: Server omitted metadata, the 0x00 byte was actually the start of a BinaryRow
         if ($frame instanceof MetadataOmittedRowMarker) {
             $this->state = ExecuteState::ROWS;
-            $rowParser = new BinaryRowOrEofParser($this->columnDefinitions);
-            $this->handleBinaryRow($rowParser->parseRemainingRow($reader));
 
+            $this->rowParser = new DynamicRowOrEofParser($this->columnDefinitions, forceTextFormat: false);
+
+            $tempParser = new BinaryRowParser($this->columnDefinitions);
+            $rowFrame = $tempParser->parseRemainingRow($reader);
+
+            $this->handleRowData($rowFrame->values);
             return false;
         }
 
         if ($frame instanceof EofPacket) {
             $this->state = ExecuteState::ROWS;
-
+            $this->rowParser = new DynamicRowOrEofParser($this->columnDefinitions);
             return false;
         }
 
@@ -196,9 +261,7 @@ final class ExecuteHandler
                 $this->columnDefinitions = [];
                 $this->receivedNewMetadata = true;
             }
-
             $this->columnDefinitions[] = $frame;
-
             return false;
         }
 
@@ -207,50 +270,54 @@ final class ExecuteHandler
 
     private function handleRow(PayloadReader $reader, int $length, int $seq): bool
     {
-        $parser = new BinaryRowOrEofParser($this->columnDefinitions);
-        $frame = $parser->parse($reader, $length, $seq);
+        if ($this->rowParser === null) {
+            throw new QueryException('Row parser not initialized', 0);
+        }
+
+        $frame = $this->rowParser->parse($reader, $length, $seq);
 
         if ($frame instanceof EofPacket) {
-            $this->handleEndOfResultSet($frame);
-
-            return true;
+            return $this->handleEndOfResultSet($frame);
         }
 
         if ($frame instanceof ErrPacket) {
             $exception = $this->createExceptionFromError(
                 $frame->errorCode,
-                "MySQL Error [{$frame->errorCode}]: {$frame->errorMessage}"
+                "MySQL Error[{$frame->errorCode}]: {$frame->errorMessage}"
             );
 
             if ($this->streamContext !== null && $this->streamContext->onError !== null) {
                 try {
                     ($this->streamContext->onError)($exception);
                 } catch (\Throwable $e) {
-                    // Ignore error handler errors
                 }
             }
-
             $this->currentPromise?->reject($exception);
-
             return true;
         }
 
-        if ($frame instanceof BinaryRow) {
-            $this->handleBinaryRow($frame);
-
+        if ($frame instanceof TextRow || $frame instanceof BinaryRow) {
+            $this->handleRowData($frame->values);
             return false;
         }
 
-        throw new QueryException('Unexpected packet type in execute rows', 0);
+        throw new QueryException('Unexpected packet type in execute row data', 0);
     }
 
-    private function handleBinaryRow(BinaryRow $row): void
+    /**
+     * @param array<int, mixed> $values
+     */
+    private function handleRowData(array $values): void
     {
         $assocRow = [];
         /** @var array<string, int> $nameCounts */
         $nameCounts = [];
 
-        foreach ($row->values as $index => $val) {
+        foreach ($values as $index => $val) {
+            if (! isset($this->columnDefinitions[$index])) {
+                continue;
+            }
+
             $colName = $this->columnDefinitions[$index]->name;
 
             if (isset($nameCounts[$colName])) {
@@ -271,7 +338,6 @@ final class ExecuteHandler
                 if ($this->streamContext->onError !== null) {
                     ($this->streamContext->onError)($e);
                 }
-
                 throw $e;
             }
         } else {
@@ -279,7 +345,7 @@ final class ExecuteHandler
         }
     }
 
-    private function handleEndOfResultSet(EofPacket $packet): void
+    private function handleEndOfResultSet(EofPacket $packet): bool
     {
         if ($this->streamContext !== null) {
             $duration = ((float)hrtime(true) - $this->streamStartTime) / 1e9;
@@ -291,16 +357,8 @@ final class ExecuteHandler
                 warningCount: $packet->warnings,
                 connectionId: $this->connection->getThreadId()
             );
-
-            if ($this->streamContext->onComplete !== null) {
-                try {
-                    ($this->streamContext->onComplete)($stats);
-                } catch (\Throwable $e) {
-                    // Ignore completion handler errors
-                }
-            }
-
-            $this->currentPromise?->resolve($stats);
+            $currentResult = null;
+            $currentStats = $stats;
         } else {
             $result = new Result(
                 rows: $this->rows,
@@ -310,8 +368,41 @@ final class ExecuteHandler
                 columnDefinitions: $this->columnDefinitions,
                 connectionId: $this->connection->getThreadId()
             );
-            $this->currentPromise?->resolve($result);
+            $currentResult = $result;
+            $currentStats = null;
         }
+
+        if ($packet->hasMoreResults()) {
+            $this->prepareDrain($currentResult, $currentStats);
+            return false;
+        }
+
+        if ($this->streamContext !== null) {
+            $finalStats = $this->primaryStreamStats ?? $currentStats;
+            if ($this->streamContext->onComplete !== null && $finalStats !== null) {
+                try {
+                    ($this->streamContext->onComplete)($finalStats);
+                } catch (\Throwable $e) {
+                }
+            }
+            if ($finalStats !== null) {
+                $this->currentPromise?->resolve($finalStats);
+            }
+        } else {
+            if ($currentResult !== null) {
+                if ($this->headResult === null) {
+                    $this->headResult = $currentResult;
+                } else {
+                    $this->linkValidResult($currentResult);
+                }
+            }
+
+            if ($this->headResult !== null) {
+                $this->currentPromise?->resolve($this->headResult);
+            }
+        }
+
+        return true;
     }
 
     private function createExceptionFromError(int $errorCode, string $message): \Throwable
@@ -328,10 +419,7 @@ final class ExecuteHandler
         ];
 
         if (isset($constraintErrors[$errorCode])) {
-            return new ConstraintViolationException(
-                $message . ' - ' . $constraintErrors[$errorCode],
-                $errorCode
-            );
+            return new ConstraintViolationException($message . ' - ' . $constraintErrors[$errorCode], $errorCode);
         }
 
         return new QueryException($message, $errorCode);

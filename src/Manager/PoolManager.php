@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\Manager;
 
+use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Exceptions\PoolException;
 use Hibla\Mysql\Internals\Connection as MysqlConnection;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Promise\Exceptions\TimeoutException;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectorInterface;
@@ -81,6 +83,19 @@ class PoolManager
 
     private int $maxLifetimeNanos;
 
+    private int $maxWaiters;
+
+    private float $acquireTimeout;
+
+    private PoolException $exhaustedException;
+
+    /**
+     * Real-time count of pending waiters. Decremented via finally() hook on
+     * the waiter promise, so it reflects the true number of requests still
+     * waiting regardless of how the promise settles (resolve, reject, cancel).
+     */
+    private int $pendingWaiters = 0;
+
     /**
      * @var array<int, int> Last-used timestamp (nanoseconds) keyed by spl_object_id.
      */
@@ -111,20 +126,26 @@ class PoolManager
 
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
-     * @param int                $maxSize                 Maximum number of connections in the pool.
-     * @param int                $idleTimeout             Seconds before an idle connection is closed.
-     * @param int                $maxLifetime             Seconds before a connection is rotated.
-     * @param ConnectorInterface|null $connector          Optional custom socket connector.
-     * @param bool               $enableServerSideCancellation Whether cancelling a query promise dispatches
-     *                                                    KILL QUERY to the server. Defaults to true.
+     * @param int $maxSize Maximum number of connections in the pool.
+     * @param int $idleTimeout Seconds before an idle connection is closed.
+     * @param int $maxLifetime Seconds before a connection is rotated.
+     * @param bool $enableServerSideCancellation Whether cancelling a query promise dispatches
+     *                                           KILL QUERY to the server. Defaults to true.
+     * @param int $maxWaiters Maximum number of requests allowed in the queue
+     *                        waiting for a connection. 0 means unlimited.
+     * @param float $acquireTimeout Maximum seconds to wait for a connection before giving up.
+     *                              0.0 means unlimited (wait forever).
+     * @param ConnectorInterface|null $connector Optional custom socket connector.
      */
     public function __construct(
         ConnectionParams|array|string $config,
         int $maxSize = 10,
         int $idleTimeout = 300,
         int $maxLifetime = 3600,
+        bool $enableServerSideCancellation = false,
+        int $maxWaiters = 0,
+        float $acquireTimeout = 0.0,
         ?ConnectorInterface $connector = null,
-        bool $enableServerSideCancellation = true,
     ) {
         $params = match (true) {
             $config instanceof ConnectionParams => $config,
@@ -151,7 +172,23 @@ class PoolManager
             throw new InvalidArgumentException('Max lifetime must be greater than 0');
         }
 
+        if ($maxWaiters < 0) {
+            throw new InvalidArgumentException('Max waiters must be 0 or greater');
+        }
+
+        if ($acquireTimeout < 0.0) {
+            throw new InvalidArgumentException('Acquire timeout must be 0.0 or greater');
+        }
+
+        // Optimization: Pre-instantiate the exception to avoid stack trace allocation
+        // during high-load rejection scenarios.
+        $this->exhaustedException = new PoolException(
+            "Connection pool exhausted. Max waiters limit ({$maxWaiters}) reached."
+        );
+
         $this->configValidated = true;
+        $this->maxWaiters = $maxWaiters;
+        $this->acquireTimeout = $acquireTimeout;
         $this->maxSize = $maxSize;
         $this->connector = $connector;
         $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
@@ -171,9 +208,9 @@ class PoolManager
      * If no idle connection is available and the pool is not at capacity,
      * a new connection is created. Otherwise the caller is queued as a waiter.
      *
-     * Waiter promises support cancellation: if the returned promise is cancelled
-     * before a connection becomes available, the waiter is silently skipped on
-     * the next `release()` call without affecting pool accounting.
+     * Waiter promises support cancellation and timeouts:
+     * - If cancelled before connection acquisition, it is skipped.
+     * - If acquireTimeout is set and exceeded, the promise rejects with TimeoutException.
      *
      * @return PromiseInterface<MysqlConnection>
      */
@@ -220,14 +257,47 @@ class PoolManager
             return $this->createNewConnection();
         }
 
+        if ($this->maxWaiters > 0 && $this->pendingWaiters >= $this->maxWaiters) {
+            return Promise::rejected($this->exhaustedException);
+        }
+
         // At capacity — enqueue a waiter.
         /** @var Promise<MysqlConnection> $waiterPromise */
         $waiterPromise = new Promise();
+
+        // If an acquire timeout is configured, schedule a timer to fail the request
+        // if a connection is not obtained in time.
+        if ($this->acquireTimeout > 0.0) {
+            $timerId = Loop::addTimer($this->acquireTimeout, function () use ($waiterPromise): void {
+                if ($waiterPromise->isPending()) {
+                    $waiterPromise->reject(new TimeoutException(
+                        $this->acquireTimeout
+                    ));
+                }
+            });
+
+            // Decrement the real-time counter and cancel the timer regardless of
+            // outcome (success, failure, or user cancellation).
+            $waiterPromise->finally(function () use ($timerId): void {
+                $this->pendingWaiters--;
+                Loop::cancelTimer($timerId);
+            })->catch(static function (): void {
+                // Suppress exception propagation on the cleanup chain.
+            });
+        } else {
+            // No timeout — just decrement the counter when the waiter settles.
+            $waiterPromise->finally(function (): void {
+                $this->pendingWaiters--;
+            })->catch(static function (): void {
+                // Suppress exception propagation on the cleanup chain.
+            });
+        }
+
         $this->waiters->enqueue($waiterPromise);
+        $this->pendingWaiters++;
 
         return $waiterPromise;
     }
-
     /**
      * Releases a connection back to the pool.
      *
@@ -282,17 +352,23 @@ class PoolManager
         return [
             'active_connections' => $this->activeConnections,
             'pooled_connections' => $this->pool->count(),
-            'waiting_requests' => $this->waiters->count(),
+            'waiting_requests' => $this->pendingWaiters,
             'draining_connections' => \count($this->drainingConnections),
             'max_size' => $this->maxSize,
+            'max_waiters' => $this->maxWaiters,
+            'acquire_timeout' => $this->acquireTimeout,
             'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
             'query_cancellation_enabled' => $this->connectionParams->enableServerSideCancellation,
             'compression_enabled' => $this->connectionParams->compress,
             'reset_connection_enabled' => $this->connectionParams->resetConnection,
+            'multi_statements_enabled' => $this->connectionParams->multiStatements,
         ];
     }
 
+    /**
+     * Closes all connections in all states (idle, draining, active) and rejects all waiters.
+     */
     /**
      * Closes all connections in all states (idle, draining, active) and rejects all waiters.
      */
@@ -334,6 +410,7 @@ class PoolManager
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
         $this->activeConnections = 0;
+        $this->pendingWaiters = 0;
         $this->connectionLastUsed = [];
         $this->connectionCreatedAt = [];
         $this->isClosing = false;
@@ -380,8 +457,7 @@ class PoolManager
                         $stats['unhealthy']++;
                         $this->removeConnection($connection);
                     }
-                )
-            ;
+                );
         }
 
         Promise::all($checkPromises)
@@ -629,8 +705,11 @@ class PoolManager
     }
 
     /**
-     * Dequeues the next non-cancelled waiter promise, discarding any cancelled
-     * ones encountered along the way.
+     * Dequeues the next valid waiter promise.
+     *
+     * Discards any waiters that are:
+     * 1. Cancelled (by the user)
+     * 2. Rejected (by acquire timeout)
      *
      * @return Promise<MysqlConnection>|null
      */
@@ -640,7 +719,9 @@ class PoolManager
             /** @var Promise<MysqlConnection> $waiter */
             $waiter = $this->waiters->dequeue();
 
-            if (! $waiter->isCancelled()) {
+            // Check isSettled() instead of just isCancelled().
+            // This properly handles both "Cancelled by user" and "Rejected by Timeout".
+            if ($waiter->isPending()) {
                 return $waiter;
             }
         }

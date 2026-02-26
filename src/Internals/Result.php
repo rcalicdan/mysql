@@ -32,6 +32,11 @@ class Result implements MysqlResult
     private readonly array $resolvedColumns;
 
     /**
+     * Pointer to the next result set (if multiple results exist).
+     */
+    private ?MysqlResult $nextResult = null;
+
+    /**
      * @param array<int, array<string, mixed>> $rows
      * @param array<int, ColumnDefinition> $columnDefinitions
      */
@@ -46,16 +51,33 @@ class Result implements MysqlResult
         $this->numRows = \count($this->rows);
 
         $this->resolvedColumns = array_map(
-            fn (ColumnDefinition $col) => new MysqlColumnDefinition($col),
+            fn(ColumnDefinition $col) => new MysqlColumnDefinition($col),
             $this->columnDefinitions
         );
 
         $this->columnNames = array_map(
-            fn (MysqlColumnDefinition $col) => $col->name,
+            fn(MysqlColumnDefinition $col) => $col->name,
             $this->resolvedColumns
         );
 
         $this->columnCount = \count($this->columnNames);
+    }
+
+    /**
+     * @internal
+     * Links the next result set to this one.
+     */
+    public function setNextResult(MysqlResult $result): void
+    {
+        $this->nextResult = $result;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function nextResult(): ?MysqlResult
+    {
+        return $this->nextResult;
     }
 
     /**
@@ -108,7 +130,7 @@ class Result implements MysqlResult
      */
     public function fetchColumn(string|int $column = 0): array
     {
-        return array_map(fn ($row) => $row[$column] ?? null, $this->rows);
+        return array_map(fn($row) => $row[$column] ?? null, $this->rows);
     }
 
     /**

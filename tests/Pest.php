@@ -9,8 +9,12 @@ use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\MysqlClient;
 
 use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Promise\Promise;
 
 uses()
+    ->beforeAll(function () {
+        Promise::setRejectionHandler(fn() => null);
+    })
     ->afterEach(function () {
         Mockery::close();
     })
@@ -89,7 +93,7 @@ function buildMySQLErrPacket(int $errorCode, string $errorMessage): string
     return $header . $payload;
 }
 
-function testConnectionParams(): ConnectionParams
+function testConnectionParams(bool $enableServerSideCancellation = false): ConnectionParams
 {
     return ConnectionParams::fromArray([
         'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
@@ -97,12 +101,13 @@ function testConnectionParams(): ConnectionParams
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
         'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
         'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+        'enable_server_side_cancellation' => $enableServerSideCancellation
     ]);
 }
 
-function makeConnection(): Connection
+function makeConnection(bool $enableServerSideCancellation = false): Connection
 {
-    $conn = await(Connection::create(testConnectionParams()));
+    $conn = await(Connection::create(testConnectionParams($enableServerSideCancellation)));
 
     return $conn;
 }
@@ -117,10 +122,11 @@ function makeClient(
     int $idleTimeout = 300,
     int $maxLifetime = 3600,
     int $statementCacheSize = 256,
-    bool $enableStatementCache = true
+    bool $enableStatementCache = true,
+    bool $enableServerSideCancellation = false
 ): MysqlClient {
     return new MysqlClient(
-        testConnectionParams(),
+        testConnectionParams($enableServerSideCancellation),
         $maxConnections,
         $idleTimeout,
         $maxLifetime,
@@ -239,6 +245,39 @@ function makeResetClient(int $maxConnections = 1): MysqlClient
             'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
             'reset_connection' => true,
             'enable_server_side_cancellation' => false,
+        ],
+        $maxConnections
+    );
+}
+
+function makeWaiterClient(int $maxConnections = 2, int $maxWaiters = 5): MysqlClient
+{
+    return new MysqlClient(
+        config: testConnectionParams(),
+        maxConnections: $maxConnections,
+        maxWaiters: $maxWaiters
+    );
+}
+
+function makeTimeoutClient(int $maxConnections = 1, float $acquireTimeout = 1.0): MysqlClient
+{
+    return new MysqlClient(
+        config: testConnectionParams(),
+        maxConnections: $maxConnections,
+        acquireTimeout: $acquireTimeout
+    );
+}
+
+function makeMultiStatementClient(int $maxConnections = 5): MysqlClient
+{
+    return new MysqlClient(
+        [
+            'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+            'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+            'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
+            'username' => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
+            'password' => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+            'multi_statements' => true,
         ],
         $maxConnections
     );

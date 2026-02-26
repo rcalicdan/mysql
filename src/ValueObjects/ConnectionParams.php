@@ -21,20 +21,12 @@ final readonly class ConnectionParams
      * @param string|null $sslCert Path to the SSL client certificate file.
      * @param string|null $sslKey Path to the SSL client key file.
      * @param bool $sslVerify Whether to verify the server SSL certificate.
-     * @param float $killTimeoutSeconds How long to wait for a KILL QUERY side-channel
-     *                                  to settle before proceeding with teardown.
-     *                                  Must be greater than zero.
-     * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY when a query
-     *                                           promise is cancelled. When false, cancellation
-     *                                           only transitions the promise state — the
-     *                                           server-side query runs to completion. Defaults
-     *                                           to true.
-     * @param bool $compress Whether to enable MySQL Protocol Compression (zlib).
-     *                       Requires the server to support CLIENT_COMPRESS.
-     *                       Defaults to false.
-     * @param bool $resetConnection Whether to send COM_RESET_CONNECTION before returning
-     *                              the connection to the pool. Clears session state.
-     *                              Defaults to false.
+     * @param float $killTimeoutSeconds How long to wait for a KILL QUERY side-channel.
+     * @param bool $enableServerSideCancellation Whether to dispatch KILL QUERY and do server side cancellation.
+     * @param bool $compress Whether to enable MySQL Protocol Compression.
+     * @param bool $resetConnection Whether to send COM_RESET_CONNECTION on release.
+     * @param bool $multiStatements Whether to allow stacked queries (e.g. "SELECT 1; SELECT 2").
+     *                              Security risk if enabled. Defaults to false.
      */
     public function __construct(
         public string $host,
@@ -50,9 +42,10 @@ final readonly class ConnectionParams
         public ?string $sslKey = null,
         public bool $sslVerify = false,
         public float $killTimeoutSeconds = self::DEFAULT_KILL_TIMEOUT_SECONDS,
-        public bool $enableServerSideCancellation = true,
+        public bool $enableServerSideCancellation = false,
         public bool $compress = false,
         public bool $resetConnection = false,
+        public bool $multiStatements = false,
     ) {
         if ($this->killTimeoutSeconds <= 0) {
             throw new \InvalidArgumentException(
@@ -67,11 +60,12 @@ final readonly class ConnectionParams
     /**
      * Creates ConnectionParams from array configuration.
      *
+     *   
      * Recognised keys:
      *   host, port, username, password, database, charset, connect_timeout,
      *   ssl, ssl_ca, ssl_cert, ssl_key, ssl_verify, kill_timeout_seconds,
      *   enable_server_side_cancellation, compress, reset_connection
-     *
+     * 
      * @param array<string, mixed> $config
      */
     public static function fromArray(array $config): self
@@ -125,16 +119,19 @@ final readonly class ConnectionParams
             ? (float) $killTimeoutSeconds
             : self::DEFAULT_KILL_TIMEOUT_SECONDS;
 
-        $enableServerSideCancellation = $config['enable_server_side_cancellation'] ?? true;
+        $enableServerSideCancellation = $config['enable_server_side_cancellation'] ?? false;
         $enableServerSideCancellation = \is_scalar($enableServerSideCancellation)
             ? (bool) $enableServerSideCancellation
-            : true;
+            : false;
 
         $compress = $config['compress'] ?? false;
         $compress = \is_scalar($compress) ? (bool) $compress : false;
 
         $resetConnection = $config['reset_connection'] ?? false;
         $resetConnection = \is_scalar($resetConnection) ? (bool) $resetConnection : false;
+
+        $multiStatements = $config['multi_statements'] ?? false;
+        $multiStatements = \is_scalar($multiStatements) ? (bool) $multiStatements : false;
 
         return new self(
             host: $host,
@@ -153,22 +150,12 @@ final readonly class ConnectionParams
             enableServerSideCancellation: $enableServerSideCancellation,
             compress: $compress,
             resetConnection: $resetConnection,
+            multiStatements: $multiStatements,
         );
     }
 
     /**
      * Creates ConnectionParams from MySQL URI.
-     *
-     * Supports URIs like:
-     * - mysql://user:pass@localhost:3306/database
-     * - mysql://user:pass@localhost/database?ssl=true&ssl_verify=true
-     * - mysql://user:pass@localhost/database?kill_timeout_seconds=5.0
-     * - mysql://user:pass@localhost/database?enable_server_side_cancellation=false
-     * - mysql://user:pass@localhost/database?compress=true&reset_connection=true
-     * - user:pass@localhost:3306/database (scheme is optional)
-     *
-     * @param string $uri MySQL connection URI
-     * @throws \InvalidArgumentException if URI is invalid
      */
     public static function fromUri(string $uri): self
     {
@@ -218,6 +205,10 @@ final readonly class ConnectionParams
             ? filter_var($query['reset_connection'], FILTER_VALIDATE_BOOLEAN)
             : false;
 
+        $multiStatements = isset($query['multi_statements'])
+            ? filter_var($query['multi_statements'], FILTER_VALIDATE_BOOLEAN)
+            : false;
+
         return new self(
             host: (string) $parts['host'],
             port: isset($parts['port']) ? (int) $parts['port'] : 3306,
@@ -235,15 +226,10 @@ final readonly class ConnectionParams
             enableServerSideCancellation: $enableServerSideCancellation,
             compress: $compress,
             resetConnection: $resetConnection,
+            multiStatements: $multiStatements,
         );
     }
 
-    /**
-     * Returns a new instance with $enableServerSideCancellation overridden.
-     *
-     * Used by PoolManager to apply a pool-level cancellation override without
-     * mutating the original ConnectionParams the caller passed in.
-     */
     public function withQueryCancellation(bool $enabled): self
     {
         return new self(
@@ -263,6 +249,7 @@ final readonly class ConnectionParams
             enableServerSideCancellation: $enabled,
             compress: $this->compress,
             resetConnection: $this->resetConnection,
+            multiStatements: $this->multiStatements,
         );
     }
 
