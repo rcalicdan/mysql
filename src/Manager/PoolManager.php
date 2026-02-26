@@ -7,6 +7,8 @@ namespace Hibla\Mysql\Manager;
 use Hibla\EventLoop\Loop;
 use Hibla\Mysql\Exceptions\PoolException;
 use Hibla\Mysql\Internals\Connection as MysqlConnection;
+use Hibla\Mysql\Internals\ConnectionSetup;
+use Hibla\Mysql\Interfaces\ConnectionSetup as ConnectionSetupInterface;
 use Hibla\Mysql\ValueObjects\ConnectionParams;
 use Hibla\Promise\Exceptions\TimeoutException;
 use Hibla\Promise\Interfaces\PromiseInterface;
@@ -15,6 +17,8 @@ use Hibla\Socket\Interfaces\ConnectorInterface;
 use InvalidArgumentException;
 use SplQueue;
 use Throwable;
+
+use function Hibla\async;
 
 /**
  * @internal This is a low-level, internal class. DO NOT USE IT DIRECTLY.
@@ -54,6 +58,15 @@ use Throwable;
  * KILL QUERY requires a separate TCP connection to the same server. These
  * kill connections are intentionally created outside the pool — they are brief,
  * critical, and must never be blocked by pool capacity limits.
+ *
+ * ## onConnect Hook
+ *
+ * An optional callable may be provided to run once per physical connection
+ * immediately after the MySQL handshake completes. The hook receives a
+ * ConnectionSetupInterface — a minimal query surface that never leaks the
+ * internal Connection object. Both sync and async (promise-returning) hooks
+ * are supported. If the hook rejects or throws, the connection is dropped
+ * entirely rather than returned to the pool in an unknown session state.
  *
  * This class is not subject to any backward compatibility (BC) guarantees.
  */
@@ -125,17 +138,27 @@ class PoolManager
     private bool $isClosing = false;
 
     /**
+     * @var (callable(ConnectionSetupInterface): (PromiseInterface<mixed>|void)|null)|null
+     */
+    private readonly mixed $onConnect;
+
+    /**
      * @param ConnectionParams|array<string, mixed>|string $config
      * @param int $maxSize Maximum number of connections in the pool.
      * @param int $idleTimeout Seconds before an idle connection is closed.
      * @param int $maxLifetime Seconds before a connection is rotated.
      * @param bool $enableServerSideCancellation Whether cancelling a query promise dispatches
-     *                                           KILL QUERY to the server. Defaults to true.
+     *                                           KILL QUERY to the server. Defaults to false.
      * @param int $maxWaiters Maximum number of requests allowed in the queue
      *                        waiting for a connection. 0 means unlimited.
      * @param float $acquireTimeout Maximum seconds to wait for a connection before giving up.
      *                              0.0 means unlimited (wait forever).
      * @param ConnectorInterface|null $connector Optional custom socket connector.
+     * @param (callable(ConnectionSetupInterface): (PromiseInterface<mixed>|void))|null $onConnect
+     *        Optional hook invoked once per physical connection immediately after the MySQL
+     *        handshake completes. Use it to set session variables, select a default schema,
+     *        or configure character sets. Both sync and async (promise-returning) callables
+     *        are accepted. If the hook rejects or throws, the connection is dropped entirely.
      */
     public function __construct(
         ConnectionParams|array|string $config,
@@ -146,6 +169,7 @@ class PoolManager
         int $maxWaiters = 0,
         float $acquireTimeout = 0.0,
         ?ConnectorInterface $connector = null,
+        ?callable $onConnect = null,
     ) {
         $params = match (true) {
             $config instanceof ConnectionParams => $config,
@@ -195,6 +219,7 @@ class PoolManager
         $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
+        $this->onConnect = $onConnect;
     }
 
     /**
@@ -298,6 +323,7 @@ class PoolManager
 
         return $waiterPromise;
     }
+
     /**
      * Releases a connection back to the pool.
      *
@@ -363,12 +389,10 @@ class PoolManager
             'compression_enabled' => $this->connectionParams->compress,
             'reset_connection_enabled' => $this->connectionParams->resetConnection,
             'multi_statements_enabled' => $this->connectionParams->multiStatements,
+            'on_connect_hook' => $this->onConnect !== null,
         ];
     }
 
-    /**
-     * Closes all connections in all states (idle, draining, active) and rejects all waiters.
-     */
     /**
      * Closes all connections in all states (idle, draining, active) and rejects all waiters.
      */
@@ -474,10 +498,40 @@ class PoolManager
                     }
                     $promise->reject($e);
                 }
-            )
-        ;
+            );
 
         return $promise;
+    }
+
+    /**
+     * Runs the onConnect hook on a freshly created connection before it is
+     * handed to a caller or parked in the pool.
+     *
+     * The hook receives a ConnectionSetupInterface so the internal Connection
+     * is never exposed to user code. Both sync and async (promise-returning)
+     * hooks are supported — if the hook returns a PromiseInterface the pool
+     * waits for it to settle before continuing.
+     *
+     * If the hook rejects or throws, the connection is dropped entirely via
+     * removeConnection(). This is the safest default — we cannot know what
+     * session state was left behind by a partially executed hook.
+     *
+     * @return PromiseInterface<MysqlConnection>
+     */
+    private function runOnConnectHook(MysqlConnection $connection): PromiseInterface
+    {
+        if ($this->onConnect === null) {
+            return Promise::resolved($connection);
+        }
+
+        $setup = new ConnectionSetup($connection);
+
+        // Wrap implicitly in async() so the hook can use await() directly
+        // without the caller needing asyncFn. Mirrors how transaction() works.
+        // If the hook returns a PromiseInterface, Promise::resolve() chains it
+        // correctly — so existing promise-returning hooks keep working unchanged.
+        return async(fn() => ($this->onConnect)($setup))
+            ->then(fn() => $connection);
     }
 
     /**
@@ -513,7 +567,7 @@ class PoolManager
 
                     $connection->clearCancelledFlag();
 
-                    // Mark active again for releaseClean or reset logic
+                    // Mark active again for releaseClean or reset logic.
                     $this->activeConnectionsMap[$connId] = $connection;
 
                     if ($this->connectionParams->resetConnection) {
@@ -551,8 +605,7 @@ class PoolManager
                         $this->releaseClean($connection);
                     }
                 }
-            )
-        ;
+            );
     }
 
     /**
@@ -584,7 +637,20 @@ class PoolManager
                 }
 
                 $this->activeConnectionsMap[$connId] = $connection;
-                $this->releaseClean($connection);
+
+                // Re-run the hook — COM_RESET_CONNECTION wipes all session state
+                // back to server defaults (time_zone, sql_mode, charset, etc.),
+                // putting the connection in an identical state to just after the
+                // initial handshake. The hook must restore it for the same reason
+                // it ran at connect time.
+                $this->runOnConnectHook($connection)->then(
+                    fn() => $this->releaseClean($connection),
+                    function (Throwable $e) use ($connection): void {
+                        // Hook failed after reset — unknown session state, drop it.
+                        $this->removeConnection($connection);
+                        $this->satisfyNextWaiter();
+                    }
+                );
             },
             function () use ($connection, $connId): void {
                 unset($this->drainingConnections[$connId]);
@@ -602,7 +668,6 @@ class PoolManager
      */
     private function releaseClean(MysqlConnection $connection): void
     {
-        // Hand directly to a non-cancelled waiter if one exists.
         $waiter = $this->dequeueActiveWaiter();
 
         if ($waiter !== null) {
@@ -635,6 +700,7 @@ class PoolManager
 
     /**
      * Creates a new connection and resolves the returned promise on success.
+     * Runs the onConnect hook before handing the connection to the caller.
      *
      * @return Promise<MysqlConnection>
      */
@@ -650,24 +716,30 @@ class PoolManager
                 function (MysqlConnection $connection) use ($promise): void {
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
-
-                    // Mark as active.
                     $this->activeConnectionsMap[$connId] = $connection;
 
-                    $promise->resolve($connection);
+                    $this->runOnConnectHook($connection)->then(
+                        fn() => $promise->resolve($connection),
+                        function (Throwable $e) use ($promise, $connection): void {
+                            // Hook failed — drop the connection so the pool never
+                            // hands out a connection in an unknown session state.
+                            $this->removeConnection($connection);
+                            $promise->reject($e);
+                        }
+                    );
                 },
                 function (Throwable $e) use ($promise): void {
                     $this->activeConnections--;
                     $promise->reject($e);
                 }
-            )
-        ;
+            );
 
         return $promise;
     }
 
     /**
      * Creates a new connection specifically to satisfy the next queued waiter.
+     * Runs the onConnect hook before resolving the waiter.
      */
     private function createConnectionForWaiter(): void
     {
@@ -684,24 +756,32 @@ class PoolManager
                 function (MysqlConnection $connection) use ($waiter): void {
                     $connId = spl_object_id($connection);
                     $this->connectionCreatedAt[$connId] = (int) hrtime(true);
-
-                    // Mark as active.
                     $this->activeConnectionsMap[$connId] = $connection;
 
-                    if ($waiter->isCancelled()) {
-                        $this->releaseClean($connection);
+                    $this->runOnConnectHook($connection)->then(
+                        function () use ($connection, $waiter): void {
+                            if ($waiter->isCancelled()) {
+                                // Waiter gave up while hook was running — park cleanly.
+                                $this->releaseClean($connection);
 
-                        return;
-                    }
+                                return;
+                            }
 
-                    $waiter->resolve($connection);
+                            $waiter->resolve($connection);
+                        },
+                        function (Throwable $e) use ($connection, $waiter): void {
+                            // Hook failed — drop the connection and propagate the
+                            // error to the waiter so it does not hang indefinitely.
+                            $this->removeConnection($connection);
+                            $waiter->reject($e);
+                        }
+                    );
                 },
                 function (Throwable $e) use ($waiter): void {
                     $this->activeConnections--;
                     $waiter->reject($e);
                 }
-            )
-        ;
+            );
     }
 
     /**
@@ -719,8 +799,6 @@ class PoolManager
             /** @var Promise<MysqlConnection> $waiter */
             $waiter = $this->waiters->dequeue();
 
-            // Check isSettled() instead of just isCancelled().
-            // This properly handles both "Cancelled by user" and "Rejected by Timeout".
             if ($waiter->isPending()) {
                 return $waiter;
             }

@@ -108,6 +108,7 @@ final class MysqlClient implements SqlClientInterface
         bool $resetConnection = false,
         int $maxWaiters = 0,
         float $acquireTimeout = 10.0,
+        ?callable $onConnect = null,
         ?ConnectorInterface $connector = null,
     ) {
         try {
@@ -130,6 +131,7 @@ final class MysqlClient implements SqlClientInterface
                 connector: $connector,
                 maxWaiters: $maxWaiters,
                 acquireTimeout: $acquireTimeout,
+                onConnect: $onConnect,
             );
 
             // Cache the resolved setting from the pool to avoid array lookups on every query

@@ -2,15 +2,19 @@
 
 declare(strict_types=1);
 
+use function Hibla\asyncFn;
 use function Hibla\await;
 
 use Hibla\Mysql\Exceptions\ConfigurationException;
 use Hibla\Mysql\Exceptions\NotInitializedException;
 use Hibla\Mysql\Exceptions\PoolException;
+use Hibla\Mysql\Interfaces\ConnectionSetup;
 use Hibla\Mysql\Internals\ManagedPreparedStatement;
 
 use Hibla\Mysql\MysqlClient;
 use Hibla\Promise\Exceptions\TimeoutException;
+use Hibla\Promise\Interfaces\PromiseInterface;
+use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\QueryException;
 
 beforeAll(function (): void {
@@ -1284,6 +1288,231 @@ describe('MysqlClient', function (): void {
             $result = await($client->query('SELECT ? AS val', [42]));
 
             expect($result->fetchOne()['val'])->toBe(42);
+
+            $client->close();
+        });
+    });
+
+    describe('onConnect Hook', function (): void {
+
+        it('fires once on first connect and sets session variable', function (): void {
+            $hookCallCount = 0;
+
+            $client = makeOnConnectClient(
+                onConnect: function (ConnectionSetup $conn) use (&$hookCallCount): PromiseInterface {
+                    $hookCallCount++;
+                    return $conn->execute("SET SESSION time_zone = '+05:30'");
+                }
+            );
+
+            $tz = await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($hookCallCount)->toBe(1)
+                ->and($tz)->toBe('+05:30');
+
+            $client->close();
+        });
+
+        it('does not fire again on connection reuse', function (): void {
+            $hookCallCount = 0;
+
+            $client = makeOnConnectClient(
+                onConnect: function (ConnectionSetup $conn) use (&$hookCallCount): PromiseInterface {
+                    $hookCallCount++;
+                    return $conn->execute("SET SESSION time_zone = '+05:30'");
+                }
+            );
+
+            await($client->fetchValue("SELECT @@session.time_zone"));
+            await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($hookCallCount)->toBe(1);
+
+            $client->close();
+        });
+
+        it('session variable persists across checkouts on the same connection', function (): void {
+            $client = makeOnConnectClient(
+                onConnect: fn(ConnectionSetup $conn) => $conn->execute("SET SESSION time_zone = '+05:30'")
+            );
+
+            $tz1 = await($client->fetchValue("SELECT @@session.time_zone"));
+            $tz2 = await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($tz1)->toBe('+05:30')
+                ->and($tz2)->toBe('+05:30');
+
+            $client->close();
+        });
+
+        it('hook receives ConnectionSetup, not the internal Connection', function (): void {
+            $receivedClass = null;
+
+            $client = makeOnConnectClient(
+                onConnect: function (mixed $conn) use (&$receivedClass): void {
+                    $receivedClass = get_class($conn);
+                }
+            );
+
+            await($client->fetchValue("SELECT 1"));
+
+            expect($receivedClass)
+                ->toBe(\Hibla\Mysql\Internals\ConnectionSetup::class)
+                ->and(is_a($receivedClass, ConnectionSetup::class, true))->toBeTrue();
+
+            $client->close();
+        });
+
+        it('async hook is fully awaited before the query runs', function (): void {
+            $order = [];
+
+            $client = makeOnConnectClient(
+                onConnect: function (ConnectionSetup $conn) use (&$order): PromiseInterface {
+                    return $conn->execute("SET SESSION time_zone = '+00:00'")
+                        ->then(function () use (&$order): void {
+                            $order[] = 'hook_done';
+                        });
+                }
+            );
+
+            await($client->fetchValue("SELECT @@session.time_zone"));
+            $order[] = 'query_done';
+
+            expect($order)->toBe(['hook_done', 'query_done']);
+
+            $client->close();
+        });
+
+        it('fires once per physical connection when pool grows', function (): void {
+            $hookCallCount = 0;
+
+            $client = makeOnConnectClient(
+                maxConnections: 3,
+                onConnect: function (ConnectionSetup $conn) use (&$hookCallCount): PromiseInterface {
+                    $hookCallCount++;
+                    return $conn->execute("SET SESSION time_zone = '+09:00'");
+                }
+            );
+
+            [$tz1, $tz2, $tz3] = await(Promise::all([
+                $client->fetchValue("SELECT @@session.time_zone"),
+                $client->fetchValue("SELECT @@session.time_zone"),
+                $client->fetchValue("SELECT @@session.time_zone"),
+            ]));
+
+            expect($hookCallCount)->toBe(3)
+                ->and($tz1)->toBe('+09:00')
+                ->and($tz2)->toBe('+09:00')
+                ->and($tz3)->toBe('+09:00');
+
+            await(Promise::all([
+                $client->fetchValue("SELECT 1"),
+                $client->fetchValue("SELECT 1"),
+                $client->fetchValue("SELECT 1"),
+            ]));
+
+            expect($hookCallCount)->toBe(3);
+
+            $client->close();
+        });
+
+        it('rejects the caller and drops the connection when hook fails', function (): void {
+            $client = makeOnConnectClient(
+                onConnect: fn(ConnectionSetup $conn) => $conn->execute(
+                    "SET SESSION invalid_var_that_does_not_exist = 1"
+                )
+            );
+
+            expect(fn() => await($client->fetchValue("SELECT 1")))
+                ->toThrow(QueryException::class);
+
+            expect($client->getStats()['active_connections'])->toBe(0);
+
+            $client->close();
+        });
+
+        it('query() in hook returns a MysqlResult the hook can inspect', function (): void {
+            $serverVersion = null;
+
+            $client = makeOnConnectClient(
+                onConnect: function (ConnectionSetup $conn) use (&$serverVersion): PromiseInterface {
+                    return $conn->query("SELECT VERSION() AS version")
+                        ->then(function (\Hibla\Mysql\Interfaces\MysqlResult $result) use (&$serverVersion): void {
+                            $row = $result->fetchOne();
+                            $serverVersion = $row['version'] ?? null;
+                        });
+                }
+            );
+
+            await($client->fetchValue("SELECT 1"));
+
+            expect($serverVersion)->not->toBeNull();
+
+            $client->close();
+        });
+
+        it('no hook — normal pool behaviour is unchanged', function (): void {
+            $client = makeOnConnectClient();
+
+            $result = await($client->fetchValue("SELECT 42"));
+
+            expect((int) $result)->toBe(42)
+                ->and($client->getStats()['on_connect_hook'])->toBeFalse();
+
+            $client->close();
+        });
+
+        it('hook re-runs after COM_RESET_CONNECTION restores session state', function (): void {
+            $hookCallCount = 0;
+
+            $client = makeOnConnectClient(
+                resetConnection: true,
+                onConnect: function (ConnectionSetup $conn) use (&$hookCallCount): PromiseInterface {
+                    $hookCallCount++;
+                    return $conn->execute("SET SESSION time_zone = '+05:30'");
+                }
+            );
+
+            $tz1 = await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($hookCallCount)->toBe(1)
+                ->and($tz1)->toBe('+05:30');
+
+
+            $tz2 = await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($hookCallCount)->toBe(2)
+                ->and($tz2)->toBe('+05:30');
+
+            $tz3 = await($client->fetchValue("SELECT @@session.time_zone"));
+
+            expect($hookCallCount)->toBe(3)
+                ->and($tz3)->toBe('+05:30');
+
+            $client->close();
+        });
+
+        it('asyncFn pattern works as onConnect hook', function (): void {
+            $hookCallCount = 0;
+
+            $client = makeOnConnectClient(
+                onConnect: asyncFn(function (ConnectionSetup $conn) use (&$hookCallCount): void {
+                    $hookCallCount++;
+                    await($conn->execute("SET SESSION time_zone = '+05:30'"));
+                    await($conn->execute("SET SESSION sql_mode = 'STRICT_ALL_TABLES'"));
+                })
+            );
+
+            $tz   = await($client->fetchValue("SELECT @@session.time_zone"));
+            $mode = await($client->fetchValue("SELECT @@session.sql_mode"));
+
+            expect($hookCallCount)->toBe(1)
+                ->and($tz)->toBe('+05:30')
+                ->and($mode)->toBe('STRICT_ALL_TABLES');
+
+            await($client->fetchValue("SELECT 1"));
+
+            expect($hookCallCount)->toBe(1);
 
             $client->close();
         });

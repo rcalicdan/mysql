@@ -282,3 +282,23 @@ function makeMultiStatementClient(int $maxConnections = 5): MysqlClient
         $maxConnections
     );
 }
+
+function makeOnConnectClient(
+    int $maxConnections = 1,
+    bool $resetConnection = false,
+    ?callable $onConnect = null,
+): MysqlClient {
+    return new MysqlClient(
+        config: [
+            'host'                           => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
+            'port'                           => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
+            'database'                       => $_ENV['MYSQL_DATABASE'] ?? 'test',
+            'username'                       => $_ENV['MYSQL_USERNAME'] ?? 'test_user',
+            'password'                       => $_ENV['MYSQL_PASSWORD'] ?? 'test_password',
+            'reset_connection'               => $resetConnection,
+            'enable_server_side_cancellation' => false,
+        ],
+        maxConnections: $maxConnections,
+        onConnect: $onConnect,
+    );
+}
