@@ -84,6 +84,8 @@ class PoolManager
 
     private int $maxSize;
 
+    private int $minSize;
+
     private int $activeConnections = 0;
 
     private ConnectionParams $connectionParams;
@@ -145,6 +147,7 @@ class PoolManager
     /**
      * @param ConnectionParams|array<string, mixed>|string $config
      * @param int $maxSize Maximum number of connections in the pool.
+     * @param int $minSize Minimum number of connections to keep open (default: 1).
      * @param int $idleTimeout Seconds before an idle connection is closed.
      * @param int $maxLifetime Seconds before a connection is rotated.
      * @param bool $enableServerSideCancellation Whether cancelling a query promise dispatches
@@ -163,6 +166,7 @@ class PoolManager
     public function __construct(
         ConnectionParams|array|string $config,
         int $maxSize = 10,
+        int $minSize = 1,
         int $idleTimeout = 300,
         int $maxLifetime = 3600,
         bool $enableServerSideCancellation = false,
@@ -186,6 +190,16 @@ class PoolManager
 
         if ($maxSize <= 0) {
             throw new InvalidArgumentException('Pool max size must be greater than 0');
+        }
+
+        if ($minSize < 0) {
+            throw new InvalidArgumentException('Pool min connections must be 0 or greater');
+        }
+
+        if ($minSize > $maxSize) {
+            throw new InvalidArgumentException(
+                \sprintf('Pool min connections (%d) cannot exceed max size (%d)', $minSize, $maxSize)
+            );
         }
 
         if ($idleTimeout <= 0) {
@@ -214,12 +228,16 @@ class PoolManager
         $this->maxWaiters = $maxWaiters;
         $this->acquireTimeout = $acquireTimeout;
         $this->maxSize = $maxSize;
+        $this->minSize = $minSize;
         $this->connector = $connector;
         $this->idleTimeoutNanos = $idleTimeout * 1_000_000_000;
         $this->maxLifetimeNanos = $maxLifetime * 1_000_000_000;
         $this->pool = new SplQueue();
         $this->waiters = new SplQueue();
         $this->onConnect = $onConnect;
+
+        // Warm up the pool to the minimum required connections
+        $this->ensureMinConnections();
     }
 
     /**
@@ -378,6 +396,7 @@ class PoolManager
         return [
             'active_connections' => $this->activeConnections,
             'pooled_connections' => $this->pool->count(),
+            'min_size' => $this->minSize,
             'waiting_requests' => $this->pendingWaiters,
             'draining_connections' => \count($this->drainingConnections),
             'max_size' => $this->maxSize,
@@ -699,6 +718,42 @@ class PoolManager
     }
 
     /**
+     * Ensures that the pool maintains the minimum number of connections.
+     * New connections are created in the background.
+     */
+    private function ensureMinConnections(): void
+    {
+        if ($this->isClosing) {
+            return;
+        }
+
+        while ($this->activeConnections < $this->minSize) {
+            $this->createNewConnection()->then(
+                function (MysqlConnection $connection): void {
+                    // Check if a waiter arrived while we were connecting
+                    $waiter = $this->dequeueActiveWaiter();
+
+                    if ($waiter !== null) {
+                        $connection->resume();
+                        $waiter->resolve($connection);
+                    } else {
+                        // Otherwise park it in the idle pool
+                        $connection->pause();
+                        $connId = spl_object_id($connection);
+                        $this->connectionLastUsed[$connId] = (int) hrtime(true);
+                        unset($this->activeConnectionsMap[$connId]);
+                        $this->pool->enqueue($connection);
+                    }
+                },
+                function (Throwable $e): void {
+                    // Ignored here; createNewConnection already decremented activeConnections.
+                    // The loop or next interaction will eventually try again.
+                }
+            );
+        }
+    }
+
+    /**
      * Creates a new connection and resolves the returned promise on success.
      * Runs the onConnect hook before handing the connection to the caller.
      *
@@ -836,6 +891,11 @@ class PoolManager
         );
 
         $this->activeConnections--;
+
+        // Automatically replenish connections if we drop below minimum
+        if (! $this->isClosing) {
+            $this->ensureMinConnections();
+        }
     }
 
     public function __destruct()

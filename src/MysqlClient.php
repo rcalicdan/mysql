@@ -99,6 +99,7 @@ final class MysqlClient implements SqlClientInterface
      */
     public function __construct(
         ConnectionParams|array|string $config,
+        int $minConnections = 1,
         int $maxConnections = 10,
         int $idleTimeout = 60,
         int $maxLifetime = 3600,
@@ -124,6 +125,7 @@ final class MysqlClient implements SqlClientInterface
 
             $this->pool = new PoolManager(
                 config: $config,
+                minSize: $minConnections,
                 maxSize: $maxConnections,
                 idleTimeout: $idleTimeout,
                 maxLifetime: $maxLifetime,
