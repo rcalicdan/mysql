@@ -17,7 +17,7 @@ use Hibla\Mysql\Internals\ManagedPreparedStatement;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Mysql\Internals\Transaction;
 use Hibla\Mysql\Manager\PoolManager;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectorInterface;
@@ -81,7 +81,7 @@ final class MysqlClient implements SqlClientInterface
      * Each instance manages its own connection pool and is completely
      * independent from other instances, allowing true multi-database support.
      *
-     * @param ConnectionParams|array<string, mixed>|string $config Database configuration.
+     * @param MysqlConfig|array<string, mixed>|string $config Database configuration.
      * @param int  $maxConnections Maximum number of connections in the pool.
      * @param int  $idleTimeout Seconds a connection can remain idle before being closed.
      * @param int  $maxLifetime Maximum seconds a connection can live before being rotated.
@@ -98,7 +98,7 @@ final class MysqlClient implements SqlClientInterface
      * @throws ConfigurationException If configuration is invalid.
      */
     public function __construct(
-        ConnectionParams|array|string $config,
+        MysqlConfig|array|string $config,
         int $minConnections = 1,
         int $maxConnections = 10,
         int $idleTimeout = 60,
@@ -316,9 +316,9 @@ final class MysqlClient implements SqlClientInterface
      * - If `$params` are provided, it uses a secure PREPARED STATEMENT (Binary Protocol).
      * - If no `$params` are provided, it uses a non-prepared query (Text Protocol).
      *
-     * @param string                   $sql        SQL query to stream.
-     * @param array<int|string, mixed> $params     Query parameters (optional).
-     * @param int                      $bufferSize Maximum rows to buffer before applying backpressure.
+     * @param string $sql SQL query to stream.
+     * @param array<int|string, mixed> $params Query parameters (optional).
+     * @param int $bufferSize Maximum rows to buffer before applying backpressure.
      * @return PromiseInterface<MysqlRowStream>
      */
     public function stream(string $sql, array $params = [], int $bufferSize = 100): PromiseInterface
@@ -352,7 +352,7 @@ final class MysqlClient implements SqlClientInterface
                             });
                     }
 
-                    $q = $innerStreamPromise->then(
+                    $query = $innerStreamPromise->then(
                         function (MysqlRowStream $stream) use ($conn, $pool, $state): MysqlRowStream {
                             if ($stream instanceof Internals\RowStream) {
                                 $state->released = true;
@@ -377,13 +377,13 @@ final class MysqlClient implements SqlClientInterface
                         }
                     );
 
-                    $q->onCancel(static function () use ($innerStreamPromise): void {
+                    $query->onCancel(static function () use ($innerStreamPromise): void {
                         if (! $innerStreamPromise->isSettled()) {
                             $innerStreamPromise->cancelChain();
                         }
                     });
 
-                    return $q;
+                    return $query;
                 })
                 ->finally($releaseOnce)
         );
@@ -431,7 +431,7 @@ final class MysqlClient implements SqlClientInterface
      * {@inheritdoc}
      *
      * @param callable(TransactionInterface): mixed $callback
-     * @param int                                   $attempts Number of retry attempts (default: 1).
+     * @param int $attempts Number of retry attempts (default: 1).
      * @return PromiseInterface<mixed>
      *
      * @throws \InvalidArgumentException If attempts is less than 1.

@@ -8,7 +8,7 @@ use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Internals\PreparedStatement;
 use Hibla\Mysql\Internals\Result;
 use Hibla\Mysql\Internals\RowStream;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Socket\Connector;
 
 use Hibla\Sql\Exceptions\ConnectionException;
@@ -548,7 +548,7 @@ describe('Connection', function (): void {
         }
 
         it('connects using a custom ConnectorInterface instance', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
 
             expect($conn)->toBeInstanceOf(Connection::class)
                 ->and($conn->isReady())->toBeTrue()
@@ -559,7 +559,7 @@ describe('Connection', function (): void {
         });
 
         it('can ping using a custom connector', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
 
             expect(await($conn->ping()))->toBeTrue();
 
@@ -567,7 +567,7 @@ describe('Connection', function (): void {
         });
 
         it('can execute a plain query using a custom connector', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
             $result = await($conn->query('SELECT 1 AS val'));
 
             expect($result->fetchOne()['val'])->toBe('1');
@@ -576,7 +576,7 @@ describe('Connection', function (): void {
         });
 
         it('can INSERT and SELECT using a custom connector', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
 
             await($conn->query(
                 "INSERT INTO pest_users (name, email, age) VALUES ('CustomConn', 'custom@example.com', 99)"
@@ -597,7 +597,7 @@ describe('Connection', function (): void {
         });
 
         it('can use a prepared statement using a custom connector', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
 
             $stmt = await($conn->prepare(
                 'INSERT INTO pest_users (name, email, age) VALUES (?, ?, ?)'
@@ -613,7 +613,7 @@ describe('Connection', function (): void {
         });
 
         it('can stream a query using a custom connector', function (): void {
-            $conn = await(Connection::create(testConnectionParams(), makeCustomConnector()));
+            $conn = await(Connection::create(testMysqlConfig(), makeCustomConnector()));
 
             await($conn->query(
                 "INSERT INTO pest_users (name, email, age) VALUES ('StreamConn', 'streamconn@example.com', 77)"
@@ -636,7 +636,7 @@ describe('Connection', function (): void {
         });
 
         it('rejects connection with wrong credentials using a custom connector', function (): void {
-            $badParams = ConnectionParams::fromArray([
+            $badParams = MysqlConfig::fromArray([
                 'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
                 'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
                 'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',

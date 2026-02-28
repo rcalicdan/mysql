@@ -15,7 +15,7 @@ use Hibla\Mysql\Handlers\PrepareHandler;
 use Hibla\Mysql\Handlers\QueryHandler;
 use Hibla\Mysql\Handlers\ResetHandler;
 use Hibla\Mysql\ValueObjects\CommandRequest;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Mysql\ValueObjects\ExecuteStreamContext;
 use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
@@ -88,7 +88,7 @@ class Connection
 
     private ?CommandRequest $currentCommand = null;
 
-    private readonly ConnectionParams $params;
+    private readonly MysqlConfig $params;
 
     private bool $isClosingError = false;
 
@@ -131,17 +131,17 @@ class Connection
     private array $pendingKills = [];
 
     /**
-     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param MysqlConfig|array<string, mixed>|string $config
      * @param ConnectorInterface|null $connector
      */
     public function __construct(
-        ConnectionParams|array|string $config,
+        MysqlConfig|array|string $config,
         private readonly ?ConnectorInterface $connector = null
     ) {
         $this->params = match (true) {
-            $config instanceof ConnectionParams => $config,
-            \is_array($config) => ConnectionParams::fromArray($config),
-            \is_string($config) => ConnectionParams::fromUri($config),
+            $config instanceof MysqlConfig => $config,
+            \is_array($config) => MysqlConfig::fromArray($config),
+            \is_string($config) => MysqlConfig::fromUri($config),
         };
 
         /** @var SplQueue<CommandRequest> $queue */
@@ -152,12 +152,12 @@ class Connection
     /**
      * Creates and connects a new Connection instance.
      *
-     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param MysqlConfig|array<string, mixed>|string $config
      * @param ConnectorInterface|null $connector
      * @return PromiseInterface<self>
      */
     public static function create(
-        ConnectionParams|array|string $config,
+        MysqlConfig|array|string $config,
         ?ConnectorInterface $connector = null
     ): PromiseInterface {
         $connection = new self($config, $connector);

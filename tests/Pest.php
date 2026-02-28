@@ -8,7 +8,7 @@ use Hibla\Mysql\Internals\Connection;
 use Hibla\Mysql\Manager\PoolManager;
 use Hibla\Mysql\MysqlClient;
 
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Promise\Promise;
 
 uses()
@@ -21,9 +21,9 @@ uses()
     ->in(__DIR__)
 ;
 
-function createConnectionParams(bool $ssl = false): ConnectionParams
+function createMysqlConfig(bool $ssl = false): MysqlConfig
 {
-    return new ConnectionParams(
+    return new MysqlConfig(
         host: 'localhost',
         port: 3306,
         username: 'testuser',
@@ -93,9 +93,9 @@ function buildMySQLErrPacket(int $errorCode, string $errorMessage): string
     return $header . $payload;
 }
 
-function testConnectionParams(bool $enableServerSideCancellation = false): ConnectionParams
+function testMysqlConfig(bool $enableServerSideCancellation = false): MysqlConfig
 {
-    return ConnectionParams::fromArray([
+    return MysqlConfig::fromArray([
         'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
         'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
@@ -107,14 +107,14 @@ function testConnectionParams(bool $enableServerSideCancellation = false): Conne
 
 function makeConnection(bool $enableServerSideCancellation = false): Connection
 {
-    $conn = await(Connection::create(testConnectionParams($enableServerSideCancellation)));
+    $conn = await(Connection::create(testMysqlConfig($enableServerSideCancellation)));
 
     return $conn;
 }
 
 function makePool(int $maxSize = 5, int $idleTimeout = 300, int $maxLifetime = 3600): PoolManager
 {
-    return new PoolManager(testConnectionParams(), $maxSize, $idleTimeout, $maxLifetime);
+    return new PoolManager(testMysqlConfig(), $maxSize, $idleTimeout, $maxLifetime);
 }
 
 function makeClient(
@@ -126,7 +126,7 @@ function makeClient(
     bool $enableServerSideCancellation = false
 ): MysqlClient {
     return new MysqlClient(
-        testConnectionParams($enableServerSideCancellation),
+        testMysqlConfig($enableServerSideCancellation),
         $maxConnections,
         $idleTimeout,
         $maxLifetime,
@@ -138,7 +138,7 @@ function makeClient(
 function makeTransactionClient(int $maxConnections = 5): MysqlClient
 {
     return new MysqlClient(
-        testConnectionParams(),
+        testMysqlConfig(),
         $maxConnections,
         300,
         3600
@@ -148,7 +148,7 @@ function makeTransactionClient(int $maxConnections = 5): MysqlClient
 function makeConcurrentClient(int $maxConnections = 10): MysqlClient
 {
     return new MysqlClient(
-        testConnectionParams(),
+        testMysqlConfig(),
         $maxConnections,
         300,
         3600
@@ -162,7 +162,7 @@ function makeCompressedClient(
     int $statementCacheSize = 256,
     bool $enableStatementCache = true
 ): MysqlClient {
-    $params = ConnectionParams::fromArray([
+    $params = MysqlConfig::fromArray([
         'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
         'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
@@ -213,7 +213,7 @@ function twentyRowPreparedSql(): string
 
 function makeResettableConnection(): Connection
 {
-    $params = ConnectionParams::fromArray([
+    $params = MysqlConfig::fromArray([
         'host' => $_ENV['MYSQL_HOST'] ?? '127.0.0.1',
         'port' => (int) ($_ENV['MYSQL_PORT'] ?? 3306),
         'database' => $_ENV['MYSQL_DATABASE'] ?? 'test',
@@ -229,7 +229,7 @@ function makeResettableConnection(): Connection
 function makeNoResetClient(int $maxConnections = 1): MysqlClient
 {
     return new MysqlClient(
-        testConnectionParams(),
+        testMysqlConfig(),
         $maxConnections
     );
 }
@@ -253,7 +253,7 @@ function makeResetClient(int $maxConnections = 1): MysqlClient
 function makeWaiterClient(int $maxConnections = 2, int $maxWaiters = 5): MysqlClient
 {
     return new MysqlClient(
-        config: testConnectionParams(),
+        config: testMysqlConfig(),
         maxConnections: $maxConnections,
         maxWaiters: $maxWaiters
     );
@@ -262,7 +262,7 @@ function makeWaiterClient(int $maxConnections = 2, int $maxWaiters = 5): MysqlCl
 function makeTimeoutClient(int $maxConnections = 1, float $acquireTimeout = 1.0): MysqlClient
 {
     return new MysqlClient(
-        config: testConnectionParams(),
+        config: testMysqlConfig(),
         maxConnections: $maxConnections,
         acquireTimeout: $acquireTimeout
     );

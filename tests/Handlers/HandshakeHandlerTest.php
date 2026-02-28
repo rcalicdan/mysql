@@ -14,7 +14,7 @@ use Tests\Fixtures\SslCapableConnection;
 describe('HandshakeHandler', function () {
     it('creates handshake handler successfully', function () {
         $socket = Mockery::mock(SocketConnection::class);
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
 
         $handler = new HandshakeHandler($socket, $params);
 
@@ -23,7 +23,7 @@ describe('HandshakeHandler', function () {
 
     it('start returns a promise', function () {
         $socket = Mockery::mock(SocketConnection::class);
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
         $handler = new HandshakeHandler($socket, $params);
 
         $packetReader = (new DefaultPacketReaderFactory())->createWithDefaultSettings();
@@ -34,7 +34,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('rejects when socket does not support encryption during SSL upgrade', function () {
-        $params = createConnectionParams(ssl: true);
+        $params = createMysqlConfig(ssl: true);
 
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
@@ -63,7 +63,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('writes SSL request packet when SSL is enabled', function () {
-        $params = createConnectionParams(ssl: true);
+        $params = createMysqlConfig(ssl: true);
 
         $socket = Mockery::mock(SslCapableConnection::class);
 
@@ -90,7 +90,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('sends auth response without SSL when SSL is disabled', function () {
-        $params = createConnectionParams(ssl: false);
+        $params = createMysqlConfig(ssl: false);
 
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
@@ -107,7 +107,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('resolves promise on successful authentication with OK packet', function () {
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -139,7 +139,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('rejects promise on authentication error with ERR packet', function () {
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -177,7 +177,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('handles auth switch request', function () {
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->twice();
 
@@ -200,7 +200,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('handles fast auth success status', function () {
-        $params = createConnectionParams();
+        $params = createMysqlConfig();
         $socket = Mockery::mock(SocketConnection::class);
         $socket->shouldReceive('write')->once();
 
@@ -222,7 +222,7 @@ describe('HandshakeHandler', function () {
     });
 
     it('handles full auth required over SSL', function () {
-        $params = createConnectionParams(ssl: true);
+        $params = createMysqlConfig(ssl: true);
 
         $socket = Mockery::mock(SslCapableConnection::class);
 

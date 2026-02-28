@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hibla\Mysql\Handlers;
 
 use Hibla\EventLoop\Loop;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
 use Hibla\Socket\Interfaces\ConnectionInterface as SocketConnection;
@@ -51,7 +51,7 @@ final class HandshakeHandler
 
     public function __construct(
         private readonly SocketConnection $socket,
-        private readonly ConnectionParams $params
+        private readonly MysqlConfig $params
     ) {
         /** @var Promise<int> $promise */
         $promise = new Promise();

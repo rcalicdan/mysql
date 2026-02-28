@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Hibla\Mysql\ValueObjects;
 
-final readonly class ConnectionParams
+final readonly class MysqlConfig
 {
     public const float DEFAULT_KILL_TIMEOUT_SECONDS = 3.0;
 
@@ -58,7 +58,7 @@ final readonly class ConnectionParams
     }
 
     /**
-     * Creates ConnectionParams from array configuration.
+     * Creates MysqlConfig from array configuration.
      *
      *   
      * Recognised keys:
@@ -155,7 +155,7 @@ final readonly class ConnectionParams
     }
 
     /**
-     * Creates ConnectionParams from MySQL URI.
+     * Creates MysqlConfig from MySQL URI.
      */
     public static function fromUri(string $uri): self
     {

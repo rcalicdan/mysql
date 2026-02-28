@@ -29,8 +29,8 @@ describe('PoolManager', function (): void {
             $pool->close();
         });
 
-        it('accepts a ConnectionParams instance directly', function (): void {
-            $pool = new PoolManager(testConnectionParams(), 3);
+        it('accepts a MysqlConfig instance directly', function (): void {
+            $pool = new PoolManager(testMysqlConfig(), 3);
             $stats = $pool->getStats();
 
             expect($stats['max_size'])->toBe(3);
@@ -82,25 +82,25 @@ describe('PoolManager', function (): void {
         });
 
         it('throws InvalidArgumentException when idleTimeout is zero', function (): void {
-            expect(fn () => new PoolManager(testConnectionParams(), 5, 0))
+            expect(fn () => new PoolManager(testMysqlConfig(), 5, 0))
                 ->toThrow(InvalidArgumentException::class, 'Idle timeout must be greater than 0')
             ;
         });
 
         it('throws InvalidArgumentException when idleTimeout is negative', function (): void {
-            expect(fn () => new PoolManager(testConnectionParams(), 5, -1))
+            expect(fn () => new PoolManager(testMysqlConfig(), 5, -1))
                 ->toThrow(InvalidArgumentException::class, 'Idle timeout must be greater than 0')
             ;
         });
 
         it('throws InvalidArgumentException when maxLifetime is zero', function (): void {
-            expect(fn () => new PoolManager(testConnectionParams(), 5, 300, 0))
+            expect(fn () => new PoolManager(testMysqlConfig(), 5, 300, 0))
                 ->toThrow(InvalidArgumentException::class, 'Max lifetime must be greater than 0')
             ;
         });
 
         it('throws InvalidArgumentException when maxLifetime is negative', function (): void {
-            expect(fn () => new PoolManager(testConnectionParams(), 5, 300, -1))
+            expect(fn () => new PoolManager(testMysqlConfig(), 5, 300, -1))
                 ->toThrow(InvalidArgumentException::class, 'Max lifetime must be greater than 0')
             ;
         });
@@ -114,7 +114,7 @@ describe('PoolManager', function (): void {
                 'happy_eyeballs' => false,
             ]);
 
-            $pool = new PoolManager(testConnectionParams(), 3, 300, 3600, $connector);
+            $pool = new PoolManager(testMysqlConfig(), 3, 300, 3600, $connector);
             $conn = await($pool->get());
 
             expect($conn)->toBeInstanceOf(Connection::class)
@@ -612,7 +612,7 @@ describe('PoolManager', function (): void {
     describe('Idle Timeout and Max Lifetime', function (): void {
 
         it('discards a connection that exceeds idle timeout on next get', function (): void {
-            $pool = new PoolManager(testConnectionParams(), 5, 1, 3600);
+            $pool = new PoolManager(testMysqlConfig(), 5, 1, 3600);
             $conn = await($pool->get());
             $pool->release($conn);
 
@@ -629,7 +629,7 @@ describe('PoolManager', function (): void {
         });
 
         it('discards a connection that exceeds max lifetime on release', function (): void {
-            $pool = new PoolManager(testConnectionParams(), 5, 300, 1);
+            $pool = new PoolManager(testMysqlConfig(), 5, 300, 1);
             $conn = await($pool->get());
 
             sleep(1.1);
@@ -644,7 +644,7 @@ describe('PoolManager', function (): void {
         });
 
         it('discards expired connection on get and creates a fresh one', function (): void {
-            $pool = new PoolManager(testConnectionParams(), 5, 300, 1);
+            $pool = new PoolManager(testMysqlConfig(), 5, 300, 1);
             $conn = await($pool->get());
             $pool->release($conn);
 

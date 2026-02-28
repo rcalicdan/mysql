@@ -9,7 +9,7 @@ use Hibla\Mysql\Exceptions\PoolException;
 use Hibla\Mysql\Internals\Connection as MysqlConnection;
 use Hibla\Mysql\Internals\ConnectionSetup;
 use Hibla\Mysql\Interfaces\ConnectionSetup as ConnectionSetupInterface;
-use Hibla\Mysql\ValueObjects\ConnectionParams;
+use Hibla\Mysql\ValueObjects\MysqlConfig;
 use Hibla\Promise\Exceptions\TimeoutException;
 use Hibla\Promise\Interfaces\PromiseInterface;
 use Hibla\Promise\Promise;
@@ -88,7 +88,7 @@ class PoolManager
 
     private int $activeConnections = 0;
 
-    private ConnectionParams $connectionParams;
+    private MysqlConfig $MysqlConfig;
 
     private ?ConnectorInterface $connector;
 
@@ -145,7 +145,7 @@ class PoolManager
     private readonly mixed $onConnect;
 
     /**
-     * @param ConnectionParams|array<string, mixed>|string $config
+     * @param MysqlConfig|array<string, mixed>|string $config
      * @param int $maxSize Maximum number of connections in the pool.
      * @param int $minSize Minimum number of connections to keep open (default: 1).
      * @param int $idleTimeout Seconds before an idle connection is closed.
@@ -164,7 +164,7 @@ class PoolManager
      *        are accepted. If the hook rejects or throws, the connection is dropped entirely.
      */
     public function __construct(
-        ConnectionParams|array|string $config,
+        MysqlConfig|array|string $config,
         int $maxSize = 10,
         int $minSize = 1,
         int $idleTimeout = 300,
@@ -176,15 +176,15 @@ class PoolManager
         ?callable $onConnect = null,
     ) {
         $params = match (true) {
-            $config instanceof ConnectionParams => $config,
-            \is_array($config) => ConnectionParams::fromArray($config),
-            \is_string($config) => ConnectionParams::fromUri($config),
+            $config instanceof MysqlConfig => $config,
+            \is_array($config) => MysqlConfig::fromArray($config),
+            \is_string($config) => MysqlConfig::fromUri($config),
         };
 
-        // Apply the pool-level override if it differs from what ConnectionParams
+        // Apply the pool-level override if it differs from what MysqlConfig
         // carries. withQueryCancellation() returns a new immutable instance so
-        // the caller's original ConnectionParams is never mutated.
-        $this->connectionParams = $params->enableServerSideCancellation === $enableServerSideCancellation
+        // the caller's original MysqlConfig is never mutated.
+        $this->MysqlConfig = $params->enableServerSideCancellation === $enableServerSideCancellation
             ? $params
             : $params->withQueryCancellation($enableServerSideCancellation);
 
@@ -377,7 +377,7 @@ class PoolManager
         }
 
         // 2. Perform connection state reset if enabled.
-        if ($this->connectionParams->resetConnection) {
+        if ($this->MysqlConfig->resetConnection) {
             $this->resetAndRelease($connection);
 
             return;
@@ -404,10 +404,10 @@ class PoolManager
             'acquire_timeout' => $this->acquireTimeout,
             'config_validated' => $this->configValidated,
             'tracked_connections' => \count($this->connectionCreatedAt),
-            'query_cancellation_enabled' => $this->connectionParams->enableServerSideCancellation,
-            'compression_enabled' => $this->connectionParams->compress,
-            'reset_connection_enabled' => $this->connectionParams->resetConnection,
-            'multi_statements_enabled' => $this->connectionParams->multiStatements,
+            'query_cancellation_enabled' => $this->MysqlConfig->enableServerSideCancellation,
+            'compression_enabled' => $this->MysqlConfig->compress,
+            'reset_connection_enabled' => $this->MysqlConfig->resetConnection,
+            'multi_statements_enabled' => $this->MysqlConfig->multiStatements,
             'on_connect_hook' => $this->onConnect !== null,
         ];
     }
@@ -589,7 +589,7 @@ class PoolManager
                     // Mark active again for releaseClean or reset logic.
                     $this->activeConnectionsMap[$connId] = $connection;
 
-                    if ($this->connectionParams->resetConnection) {
+                    if ($this->MysqlConfig->resetConnection) {
                         $this->resetAndRelease($connection);
                     } else {
                         $this->releaseClean($connection);
@@ -618,7 +618,7 @@ class PoolManager
 
                     $this->activeConnectionsMap[$connId] = $connection;
 
-                    if ($this->connectionParams->resetConnection) {
+                    if ($this->MysqlConfig->resetConnection) {
                         $this->resetAndRelease($connection);
                     } else {
                         $this->releaseClean($connection);
@@ -766,7 +766,7 @@ class PoolManager
         /** @var Promise<MysqlConnection> $promise */
         $promise = new Promise();
 
-        MysqlConnection::create($this->connectionParams, $this->connector)
+        MysqlConnection::create($this->MysqlConfig, $this->connector)
             ->then(
                 function (MysqlConnection $connection) use ($promise): void {
                     $connId = spl_object_id($connection);
@@ -806,7 +806,7 @@ class PoolManager
 
         $this->activeConnections++;
 
-        MysqlConnection::create($this->connectionParams, $this->connector)
+        MysqlConnection::create($this->MysqlConfig, $this->connector)
             ->then(
                 function (MysqlConnection $connection) use ($waiter): void {
                     $connId = spl_object_id($connection);

@@ -42,8 +42,8 @@ describe('MysqlClient', function (): void {
 
     describe('Construction', function (): void {
 
-        it('creates a client with a ConnectionParams instance', function (): void {
-            $client = new MysqlClient(testConnectionParams());
+        it('creates a client with a MysqlConfig instance', function (): void {
+            $client = new MysqlClient(testMysqlConfig());
 
             expect($client->getStats()['statement_cache_enabled'])->toBeTrue();
 
