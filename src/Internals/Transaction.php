@@ -49,8 +49,7 @@ class Transaction implements TransactionInterface
         private readonly Connection $connection,
         private readonly PoolManager $pool,
         private readonly ?ArrayCache $statementCache = null
-    ) {
-    }
+    ) {}
 
     /**
      * {@inheritdoc}
@@ -79,8 +78,7 @@ class Transaction implements TransactionInterface
                             }
                         })
                     ;
-                })
-            ;
+                });
         }
 
         return $this->withCancellation($this->trackErrorState($promise));
@@ -120,8 +118,7 @@ class Transaction implements TransactionInterface
                             return $stream;
                         })
                     ;
-                })
-            ;
+                });
         }
 
         return $this->withCancellation($this->trackErrorState($promise));
@@ -134,7 +131,7 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getAffectedRows())
+                ->then(fn(ResultInterface $result) => $result->getAffectedRows())
         );
     }
 
@@ -145,7 +142,7 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->getLastInsertId())
+                ->then(fn(ResultInterface $result) => $result->getLastInsertId())
         );
     }
 
@@ -156,21 +153,27 @@ class Transaction implements TransactionInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
-                ->then(fn (ResultInterface $result) => $result->fetchOne())
+                ->then(fn(ResultInterface $result) => $result->fetchOne())
         );
     }
 
     /**
      * {@inheritdoc}
      */
-    public function fetchValue(string $sql, string|int $column = 0, array $params = []): PromiseInterface
+    public function fetchValue(string $sql, string|int|null $column = null, array $params = []): PromiseInterface
     {
         return $this->withCancellation(
             $this->query($sql, $params)
                 ->then(function (ResultInterface $result) use ($column) {
                     $row = $result->fetchOne();
+
                     if ($row === null) {
                         return null;
+                    }
+
+                    if ($column === null) {
+                        $value = reset($row);
+                        return $value !== false ? $value : null;
                     }
 
                     return $row[$column] ?? null;
@@ -415,7 +418,7 @@ class Transaction implements TransactionInterface
     private function getCachedStatement(string $sql): PromiseInterface
     {
         if ($this->statementCache === null) {
-            return $this->connection->prepare($sql)->then(fn ($stmt) => [$stmt, false]);
+            return $this->connection->prepare($sql)->then(fn($stmt) => [$stmt, false]);
         }
 
         return $this->statementCache->get($sql)->then(function (mixed $stmt) use ($sql) {

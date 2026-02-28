@@ -25,6 +25,7 @@ use Hibla\Sql\IsolationLevelInterface;
 use Hibla\Sql\Result as ResultInterface;
 use Hibla\Sql\SqlClientInterface;
 use Hibla\Sql\Transaction as TransactionInterface;
+use Hibla\Sql\TransactionOptions;
 
 /**
  * Instance-based Asynchronous MySQL Client with Connection Pooling.
@@ -430,31 +431,29 @@ final class MysqlClient implements SqlClientInterface
     /**
      * {@inheritdoc}
      *
-     * @param callable(TransactionInterface): mixed $callback
-     * @param int $attempts Number of retry attempts (default: 1).
-     * @return PromiseInterface<mixed>
+     * @template TResult
+     * @param callable(TransactionInterface): TResult $callback
+     * @return PromiseInterface<TResult>
      *
-     * @throws \InvalidArgumentException If attempts is less than 1.
-     * @throws \Throwable                The final exception if all attempts fail.
+     * @throws \InvalidArgumentException If TransactionOptions contains invalid configuration.
+     * @throws \Throwable The final exception if all attempts are exhausted,
+     *         or immediately if the exception is non-retryable.
      */
     public function transaction(
         callable $callback,
-        int $attempts = 1,
-        ?IsolationLevelInterface $isolationLevel = null
+        ?TransactionOptions $options = null,
     ): PromiseInterface {
-        if ($attempts < 1) {
-            throw new \InvalidArgumentException('Attempts must be at least 1');
-        }
+        $options ??= TransactionOptions::default();
 
-        return async(function () use ($callback, $attempts, $isolationLevel) {
+        return async(function () use ($callback, $options) {
             $lastError = null;
 
-            for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            for ($attempt = 1; $attempt <= $options->attempts; $attempt++) {
                 $tx = null;
 
                 try {
                     /** @var TransactionInterface $tx */
-                    $tx = await($this->beginTransaction($isolationLevel));
+                    $tx = await($this->beginTransaction($options->isolationLevel));
 
                     $result = await(async(fn() => $callback($tx)));
 
@@ -468,17 +467,24 @@ final class MysqlClient implements SqlClientInterface
                         try {
                             await($tx->rollback());
                         } catch (\Throwable) {
-                            // Continue to retry logic.
+                            // Ignore rollback failures — the original error is more useful.
                         }
                     }
 
-                    if ($attempt === $attempts) {
+                    // If this was the last attempt, stop immediately.
+                    if ($attempt === $options->attempts) {
                         break;
+                    }
+
+                    // If the exception is non-retryable, rethrow it immediately
+                    // without burning through remaining attempts.
+                    if (! $options->shouldRetry($e)) {
+                        throw $e;
                     }
                 }
             }
 
-            throw $lastError ?? new \RuntimeException('Transaction failed');
+            throw $lastError ?? new \RuntimeException('Transaction failed with no recorded error.');
         });
     }
 

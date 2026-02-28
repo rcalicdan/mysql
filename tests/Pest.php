@@ -302,3 +302,13 @@ function makeOnConnectClient(
         onConnect: $onConnect,
     );
 }
+
+
+function makeManualTransactionClient(int $maxConnections = 1): MysqlClient
+{
+    return new MysqlClient(
+        config: testMysqlConfig(),
+        minConnections: 1,
+        maxConnections: $maxConnections,
+    );
+}
