@@ -233,7 +233,10 @@ class Transaction implements TransactionInterface
 
         if ($this->failed) {
             return Promise::rejected(
-                new TransactionException('Cannot commit: Transaction was aborted due to a previous query error. You must explicitly rollback().')
+                new TransactionException(
+                    'Transaction aborted due to a previous query error. '
+                        . 'Call rollback() to abort, or use savepoints to recover from expected failures.'
+                )
             );
         }
 
@@ -473,7 +476,10 @@ class Transaction implements TransactionInterface
         $this->ensureActive();
 
         if ($this->failed) {
-            throw new TransactionException('Transaction aborted due to a previous query error. You must explicitly rollback().');
+            throw new TransactionException(
+                'Transaction aborted due to a previous query error. '
+                    . 'Call rollback() to abort, or use savepoints to recover from expected failures.'
+            );
         }
     }
 

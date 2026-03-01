@@ -919,16 +919,18 @@ describe('MysqlClient Transaction', function (): void {
 
             $options = TransactionOptions::default()->withAttempts(5);
 
-            expect(fn() => await($client->transaction(
-                static function (TransactionInterface $tx) use (&$attemptCount): void {
-                    $attemptCount++;
+            expect(function () use ($client, $options, &$attemptCount): void {
+                await($client->transaction(
+                    static function (TransactionInterface $tx) use (&$attemptCount): void {
+                        $attemptCount++;
 
-                    await($tx->execute("INSERT INTO tx_test (value) VALUES ('txopt_nonretryable')"));
+                        await($tx->execute("INSERT INTO tx_test (value) VALUES ('txopt_nonretryable')"));
 
-                    throw new \RuntimeException('non-retryable failure');
-                },
-                $options
-            )))->toThrow(\RuntimeException::class, 'non-retryable failure');
+                        throw new \RuntimeException('non-retryable failure');
+                    },
+                    $options
+                ));
+            })->toThrow(\RuntimeException::class, 'non-retryable failure');
 
             expect($attemptCount)->toBe(1);
 
