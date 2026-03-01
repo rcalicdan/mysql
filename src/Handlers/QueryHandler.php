@@ -11,6 +11,8 @@ use Hibla\Mysql\ValueObjects\StreamContext;
 use Hibla\Mysql\ValueObjects\StreamStats;
 use Hibla\Promise\Promise;
 use Hibla\Sql\Exceptions\ConstraintViolationException;
+use Hibla\Sql\Exceptions\DeadlockException;
+use Hibla\Sql\Exceptions\LockWaitTimeoutException;
 use Hibla\Sql\Exceptions\QueryException;
 use Rcalicdan\MySQLBinaryProtocol\Exception\IncompleteBufferException;
 use Rcalicdan\MySQLBinaryProtocol\Frame\Command\CommandBuilder;
@@ -402,6 +404,15 @@ final class QueryHandler
 
     private function createExceptionFromError(int $errorCode, string $message): \Throwable
     {
+        if ($errorCode === 1213) {
+            return new DeadlockException($message, $errorCode);
+        }
+
+        if ($errorCode === 1205) {
+            return new LockWaitTimeoutException($message, $errorCode);
+        }
+
+
         $constraintErrors = [
             1062 => 'Duplicate entry (UNIQUE constraint)',
             1451 => 'Cannot delete parent row (FOREIGN KEY constraint)',

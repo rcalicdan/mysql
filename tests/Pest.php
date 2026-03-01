@@ -312,3 +312,15 @@ function makeManualTransactionClient(int $maxConnections = 1): MysqlClient
         maxConnections: $maxConnections,
     );
 }
+
+function makeLockClient(): MysqlClient
+{
+    // Pinned to 1 connection so each client maps to exactly one physical
+    // connection — required for deadlock and lock timeout tests where two
+    // independent connections must hold locks against each other.
+    return new MysqlClient(
+        config: testMysqlConfig(),
+        minConnections: 1,
+        maxConnections: 1,
+    );
+}
